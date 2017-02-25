@@ -3,29 +3,58 @@
      lmdb-lolevel
      posix
      srfi-4
+     srfi-18
      lazy-seq
      sodium
      test
+     matchable
+     unix-sockets
      test-generative
      data-generators)
 
-(define (clear-testdb)
-  (when (file-exists? "tests/testdb")
-    (delete-directory "tests/testdb" #t))
-  (create-directory "tests/testdb"))
+
+(define (clear-testdb #!optional (path "tests/testdb"))
+  (when (file-exists? path)
+    (delete-directory path #t))
+  (create-directory path))
+
+(define (open-test-env path)
+  (let ((env (mdb-env-create)))
+    (mdb-env-set-mapsize env 10000000)
+    (mdb-env-set-maxdbs env 3)
+    (mdb-env-open env path 0
+		  (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
+    env))
+
+(define (open-test-store path)
+  (let* ((env (open-test-env path))
+	 (txn (mdb-txn-begin env #f 0)))
+    (hash-store-open txn)))
+
+(define (reopen-store store)
+  (let* ((env (mdb-txn-env (hash-store-txn store)))
+	 (new-txn (mdb-txn-begin env #f 0)))
+    (hash-store-open new-txn)))
+
+(define (make-copy-store store)
+  (let ((path "tests/testdb-copy"))
+    (clear-testdb path)
+    (mdb-env-copy (mdb-txn-env (hash-store-txn store)) path)
+    (open-test-store path)))
+
+(define (store-copy-path from to)
+  (let* ((env (open-test-env from)))
+    (mdb-env-copy env to)
+    (mdb-env-close env)))
 
 (define (blob-append a b)
   (u8vector->blob/shared
    (u8vector-append (blob->u8vector/shared a)
 		    (blob->u8vector/shared b))))
 
-(define (make-test-store tree)
+(define (make-test-store #!optional (tree '()))
   (clear-testdb)
-  (let ((env (mdb-env-create)))
-    (mdb-env-set-mapsize env 10000000)
-    (mdb-env-set-maxdbs env 2)
-    (mdb-env-open env "tests/testdb" 0
-		  (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
+  (let ((env (open-test-env "tests/testdb")))
     (let* ((txn (mdb-txn-begin env #f 0))
 	   (dbi (hashes-dbi-open txn)))
       (let loop ((tree tree)
@@ -1404,3 +1433,802 @@
 			(string->u8vector "")
 			(string->u8vector "cat")
 			(string->u8vector "tested"))))))
+
+
+(test-group "diff - L is null, R is leaf"
+  (let ((store (make-test-store)))
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (foo-hash (generic-hash (string->blob "one") size: hash-size)))
+      (hash-put store2 (string->blob "foo") foo-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foo") ,foo-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - R is null, L is leaf"
+  (let ((store (make-test-store)))
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (one-hash (generic-hash (string->blob "one") size: hash-size)))
+      (hash-put store1 (string->blob "foo") one-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foo") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L < R"
+  (let ((store (make-test-store)))
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (one-hash (generic-hash (string->blob "one") size: hash-size))
+	  (two-hash (generic-hash (string->blob "two") size: hash-size)))
+      (hash-put store1 (string->blob "aaa") one-hash)
+      (hash-put store2 (string->blob "bbb") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "aaa") #f)
+			  #(new ,(string->blob "bbb") ,two-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L > R"
+  (let ((store (make-test-store)))
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (one-hash (generic-hash (string->blob "one") size: hash-size))
+	  (two-hash (generic-hash (string->blob "two") size: hash-size)))
+      (hash-put store2 (string->blob "aaa") one-hash)
+      (hash-put store1 (string->blob "bbb") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "aaa") ,one-hash)
+			  #(missing ,(string->blob "bbb") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L == R, L is leaf, R is leaf, same hash"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size)))
+    (hash-put store (string->blob "asdf") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `()
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L == R, L is leaf, R is leaf, different hash"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(data2-hash (generic-hash (string->blob "data2") size: hash-size)))
+    (hash-put store (string->blob "asdf") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "asdf") data2-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(different ,(string->blob "asdf") ,data2-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L is null, R is not leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "asdf") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "foo") one-hash)
+      (hash-put store2 (string->blob "foobar") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foo") ,one-hash)
+			  #(new ,(string->blob "foobar") ,two-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - R is null, L is not leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "asdf") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "foo") one-hash)
+      (hash-put store1 (string->blob "foobar") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foo") #f)
+			  #(missing ,(string->blob "foobar") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L < R, L is not leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "foo") one-hash)
+      (hash-put store1 (string->blob "foobar") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foo") #f)
+			  #(missing ,(string->blob "foobar") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L > R, R is not leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "foo") one-hash)
+      (hash-put store2 (string->blob "foobar") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foo") ,one-hash)
+			  #(new ,(string->blob "foobar") ,two-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L == R, L is not leaf, R is not leaf, same hash"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (hash-put store (string->blob "foo") one-hash)
+    (hash-put store (string->blob "foobar") two-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `()
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L == R, L is not leaf, R is not leaf, different hash"
+  (let ((store (make-test-store))
+    	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size))
+	(four-hash (generic-hash (string->blob "four") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (hash-put store (string->blob "foo") one-hash)
+    (hash-put store (string->blob "foobar") two-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "fool") three-hash)
+      (hash-put store2 (string->blob "food") four-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "food") ,four-hash)
+			  #(missing ,(string->blob "fool") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L is prefix of R, L is leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (one-hash (generic-hash (string->blob "one") size: hash-size)))
+      (hash-put store2 (string->blob "foobar") one-hash)
+      (hash-put store1 (string->blob "foo") two-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foo") #f)
+			  #(new ,(string->blob "foobar") ,one-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L is prefix of R, L is not leaf, R is leaf, L does not contain R"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (three-hash (generic-hash (string->blob "three") size: hash-size)))
+      (hash-put store1 (string->blob "foobar") one-hash)
+      (hash-put store1 (string->blob "foobaz") two-hash)
+      (hash-put store2 (string->blob "foobab") three-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foobab") ,three-hash)
+			  #(missing ,(string->blob "foobar") #f)
+			  #(missing ,(string->blob "foobaz") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L is prefix of R, L is not leaf, R is leaf, L contains R"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "foobar") one-hash)
+      (hash-put store1 (string->blob "foobaz") two-hash)
+      (hash-put store2 (string->blob "foobar") one-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foobaz") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L is prefix of R, L is not leaf, R is not a leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "foobar") one-hash)
+      (hash-put store1 (string->blob "food") two-hash)
+      (hash-put store2 (string->blob "foobar") one-hash)
+      (hash-put store2 (string->blob "foobaz") three-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "food") #f)
+			  #(new ,(string->blob "foobaz") ,three-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - R is prefix of L, R is leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "foo") two-hash)
+      (hash-put store1 (string->blob "foobar") one-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foo") ,two-hash)
+			  #(missing ,(string->blob "foobar") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - R is prefix of L, R is not leaf, L is leaf, R does not contain L"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "foobar") one-hash)
+      (hash-put store2 (string->blob "foobaz") two-hash)
+      (hash-put store1 (string->blob "foobab") three-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foobab") #f)
+			  #(new ,(string->blob "foobar") ,one-hash)
+			  #(new ,(string->blob "foobaz") ,two-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - R is prefix of L, R is not leaf, L is leaf, R contains L"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "foobar") one-hash)
+      (hash-put store2 (string->blob "foobaz") two-hash)
+      (hash-put store1 (string->blob "foobar") one-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foobaz") ,two-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - R is prefix of L, R is not leaf, L is not a leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store))
+	  (two-hash (generic-hash (string->blob "two") size: hash-size)))
+      (hash-put store2 (string->blob "foobar") one-hash)
+      (hash-put store2 (string->blob "food") two-hash)
+      (hash-put store1 (string->blob "foobar") one-hash)
+      (hash-put store1 (string->blob "foobaz") three-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "food") ,two-hash)
+			  #(missing ,(string->blob "foobaz") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L == R, L is leaf, R is not leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "foo") one-hash)
+      (hash-put store2 (string->blob "foobar") two-hash)
+      (hash-put store2 (string->blob "food") three-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing ,(string->blob "foo") #f)
+			  #(new ,(string->blob "foobar") ,two-hash)
+			  #(new ,(string->blob "food") ,three-hash))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "diff - L == R, L is leaf, R is not leaf"
+  (let ((store (make-test-store))
+	(data-hash (generic-hash (string->blob "data") size: hash-size))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size)))
+    (hash-put store (string->blob "test") data-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store1 (string->blob "foobar") two-hash)
+      (hash-put store1 (string->blob "food") three-hash)
+      (hash-put store2 (string->blob "foo") one-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(new ,(string->blob "foo") ,one-hash)
+			  #(missing ,(string->blob "foobar") #f)
+			  #(missing ,(string->blob "food") #f))
+			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(define (select-pair-not-in-operations pairs ops)
+  (let ((pair (list-ref pairs (random (length pairs)))))
+    (if (member pair
+		ops
+		(lambda (pair x)
+		  (blob=? (first pair) (second x))))
+	;; try again
+	(select-pair-not-in-operations pairs ops)
+	pair)))
+
+(define ((gen-random-operations pairs n))
+  (let loop ((ops '())
+	     (n n))
+    (if (= n 0)
+	ops
+	(case (random 3)
+	  ((0) ;; create
+	   (loop (cons `(create ,(<- (random-low-variation-key #f 20))
+				,(make-blob 20))
+		       ops)
+		 (- n 1)))
+	  ((1) ;; update
+	   (let ((pair (select-pair-not-in-operations pairs ops)))
+	     (loop (cons `(update ,(car pair)
+				  ,(make-blob 20))
+			 ops)
+		   (- n 1))))
+	  ((2) ;; delete
+	   (let ((pair (select-pair-not-in-operations pairs ops)))
+	     (loop (cons `(delete ,(car pair))
+			 ops)
+		   (- n 1))))))))
+
+(test-group "detect random create/update/delete operations using diff"
+  ;; initialize a database with random data
+  (let ((pairs (<- (gen-transform
+		    (lambda (pairs)
+		      (delete-duplicates
+		       (sort pairs
+			     (lambda (a b)
+			       (string<? (blob->string (car a))
+					 (blob->string (car b)))))
+		       (lambda (a b)
+			 (blob=? (car a) (car b)))))
+		    (gen-list-of
+		     (gen-pair-of (random-low-variation-key #f 20)
+				  (random-hash))
+		     1000))))
+	(store (make-test-store)))
+    (for-each (lambda (pair)
+		(hash-put store (car pair) (cdr pair)))
+	      pairs)
+    (mdb-txn-commit (hash-store-txn store))
+    (mdb-env-close (mdb-txn-env (hash-store-txn store)))
+    ;; test some random operations
+    (test-generative
+     ((operations (gen-random-operations pairs 20)))
+     (clear-testdb "tests/testdb-copy")
+     (store-copy-path "tests/testdb" "tests/testdb-copy")
+     (let ((store1 (open-test-store "tests/testdb"))
+	   (store2 (open-test-store "tests/testdb-copy")))
+       (for-each
+	(match-lambda
+	  (('create key hash)
+	   (hash-put store2 key hash))
+	  (('update key hash)
+	   (hash-put store2 key hash))
+	  (('delete key)
+	   (hash-delete store2 key)))
+	operations)
+       (let ((expected
+	      (sort
+	       (map (match-lambda
+		      (('create key hash)
+		       (vector 'new key hash))
+		      (('update key hash)
+		       (vector 'different key hash))
+		      (('delete key)
+		       (vector 'missing key #f)))
+		    operations)
+	       (lambda (a b)
+		 (string<? (blob->string (vector-ref a 1))
+			   (blob->string (vector-ref b 1)))))))
+	 (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	   (let ((store1-thread
+		  (make-thread
+		   (lambda ()
+		     (test expected
+			   (sort
+			    (lazy-seq->list (hash-diff store1 s1-in s1-out))
+			    (lambda (a b)
+			      (string<? (blob->string (vector-ref a 1))
+					(blob->string (vector-ref b 1))))))
+		     (close-input-port s1-in)
+		     (close-output-port s1-out))
+		   'diff))
+		 (store2-thread
+		  (make-thread
+		   (lambda ()
+		     (hash-diff-accept store2 s2-in s2-out)
+		     (close-input-port s2-in)
+		     (close-output-port s2-out))
+		   'accept)))
+	     (thread-start! store1-thread)
+	     (thread-start! store2-thread)
+	     (thread-join! store1-thread)
+	     (thread-join! store2-thread))))
+       ;; tidy up
+       (mdb-txn-commit (hash-store-txn store1))
+       (mdb-txn-commit (hash-store-txn store2))
+       (mdb-env-close (mdb-txn-env (hash-store-txn store1)))
+       (mdb-env-close (mdb-txn-env (hash-store-txn store2)))))))
+
