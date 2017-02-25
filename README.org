@@ -11,7 +11,7 @@ A daemon for disseminating events over a peer-to-peer network.
   sudo apt-get install chicken-bin libsodium-dev liblmdb-dev
 #+END_SRC
 
-*** Build
+*** Build and install
 #+BEGIN_SRC shell
   chicken-install -s
 #+END_SRC
