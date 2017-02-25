@@ -2,4 +2,5 @@
 /bench/tmp-db
 /tests/testdb
 /tests/testdb-copy
-/lib
+/lib/*.so
+/lib/*.scm
