@@ -1,0 +1,30 @@
+* Dust
+A daemon for disseminating events over a peer-to-peer network.
+
+** Install
+*** Requirements
+- [[https://code.call-cc.org/][CHICKEN Scheme 4.x]]
+- [[https://libsodium.org][libsodium]]
+- [[https://symas.com/offerings/lightning-memory-mapped-database/][LMDB]]
+
+#+BEGIN_SRC shell
+  sudo apt-get install chicken-bin libsodium-dev liblmdb-dev
+#+END_SRC
+
+*** Build
+#+BEGIN_SRC shell
+  chicken-install -s
+#+END_SRC
+
+** Run tests
+Install test dependencies.
+
+#+BEGIN_SRC shell
+  chicken-install -s test test-generative data-generators unix-sockets
+#+END_SRC
+
+Run the unit tests.
+
+#+BEGIN_SRC shell
+  csi -s tests/run.scm
+#+END_SRC
