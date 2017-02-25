@@ -1,0 +1,26 @@
+(use posix)
+
+(create-directory/parents "lib")
+(change-directory "lib")
+
+(compile -O2 -d1 -inline -s "../src/u8vector-utils.scm" -J
+	 -o "dust.u8vector-utils.so")
+(compile -O2 -d0 -s "dust.u8vector-utils.import.scm")
+
+(compile -O2 -d1 -inline -s "../src/hash-store.scm" -Iinclude -llmdb -J
+	 -o "dust.hash-store.so")
+(compile -O2 -d0 -s "dust.hash-store.import.scm")
+
+(compile -O2 -d1 -inline -s "../src/kv-store.scm" -Iinclude -llmdb -J
+	 -o "dust.kv-store.so")
+(compile -O2 -d0 -s "dust.kv-store.import.scm")
+
+(install-extension
+  'lmdb-merkle
+  '("dust.hash-store.so"
+    "dust.hash-store.import.so"
+    "dust.kv-store.so"
+    "dust.kv-store.import.so"
+    "dust.u8vector-utils.so"
+    "dust.u8vector-utils.import.so")
+  '((version "1.0.0")))

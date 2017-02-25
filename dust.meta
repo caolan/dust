@@ -1,0 +1,6 @@
+((synopsis "P2P event streams")
+ (author "Caolan McMahon")
+ (category net)
+ (license "GPL-3")
+ (needs lmdb-lolevel lazy-seq sodium matchable srfi-117 bencode)
+ (test-depends test test-generative data-generators unix-sockets))
