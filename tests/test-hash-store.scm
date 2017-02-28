@@ -1312,13 +1312,19 @@
 			 (string->u8vector "")
 			 (string->u8vector "cat")
 			 (string->u8vector "tested"))))
-    (test "if only one child in range, return it's children directly"
-	  `(#(,(string->u8vector "tested") ,tested-hash #t)
-	    #(,(string->u8vector "tester") ,tester-bucket-hash #f))
+    (test "if only one child in range, collapse subkey"
+	  `(#(,(string->u8vector "teste") ,teste-bucket-hash #f))
 	  (lazy-seq->list
 	   (child-hashes store
 			 (string->u8vector "test")
 			 (string->u8vector "tested")
+			 (string->u8vector "testers"))))
+    (test "if only one nested child in range, collapse multiple subkeys"
+	  `(#(,(string->u8vector "testers") ,testers-hash #t))
+	  (lazy-seq->list
+	   (child-hashes store
+			 (string->u8vector "test")
+			 (string->u8vector "testerr")
 			 (string->u8vector "testers"))))))
 
 (test-group "leaf-hashes"
@@ -2119,6 +2125,116 @@
 	  (thread-join! store1-thread)
 	  (thread-join! store2-thread))))))
 
+
+(test-group "bounded diff"
+  (let ((store (make-test-store))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size))
+	(four-hash (generic-hash (string->blob "four") size: hash-size))
+	(five-hash (generic-hash (string->blob "five") size: hash-size))
+	(six-hash (generic-hash (string->blob "six") size: hash-size))
+	(seven-hash (generic-hash (string->blob "seven") size: hash-size))
+	(eight-hash (generic-hash (string->blob "eight") size: hash-size))
+	(nine-hash (generic-hash (string->blob "nine") size: hash-size))
+	(ten-hash (generic-hash (string->blob "ten") size: hash-size))
+	(eleven-hash (generic-hash (string->blob "eleven") size: hash-size)))
+    (hash-put store (string->blob "abc") one-hash)
+    (hash-put store (string->blob "test") two-hash)
+    (hash-put store (string->blob "tested") three-hash)
+    (hash-put store (string->blob "tester") four-hash)
+    (hash-put store (string->blob "testing") five-hash)
+    (hash-put store (string->blob "tests") six-hash)
+    (hash-put store (string->blob "zap") seven-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-put store2 (string->blob "foo") nine-hash)
+      (hash-put store2 (string->blob "test") ten-hash)
+      (hash-delete store2 (string->blob "tester"))
+      (hash-put store2 (string->blob "testers") eight-hash)
+      (hash-put store2 (string->blob "testing") eleven-hash)
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(different ,(string->blob "testing") ,eleven-hash)
+			  #(missing ,(string->blob "tester") #f)
+			  #(new ,(string->blob "testers") ,eight-hash))
+			(lazy-seq->list
+			 (hash-diff store1
+				    s1-in
+				    s1-out
+				    (string->u8vector "tested")
+				    (string->u8vector "tests"))))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+(test-group "bounded diff 2"
+  ;; TODO: in this test, 'teap' is a prefix of both 'teaparty' and 'teapot'
+  ;; but in the function, we move forward on both during the first comparison
+  ;; meaning that 'teapot' is then incorrectly compared with 'teaset'.
+  ;; the solution might be to either skip over all keys for which 'teap' is a
+  ;; prefix instead of just the current one (it also means that diff-leaf-nodes or whatever
+  ;; won't act on just the single node, but all nodes skipped because their prefix matched),
+  ;; or perhaps just remove the optimisation that returns the nested level if there is only
+  ;; one child in bounds (this would also mean diff-children could work on prefix + subkeys
+  ;; instead of full keys I think)
+  (let ((store (make-test-store))
+	(one-hash (generic-hash (string->blob "one") size: hash-size))
+	(two-hash (generic-hash (string->blob "two") size: hash-size))
+	(three-hash (generic-hash (string->blob "three") size: hash-size))
+	(four-hash (generic-hash (string->blob "four") size: hash-size))
+	(five-hash (generic-hash (string->blob "five") size: hash-size)))
+    (hash-put store (string->blob "teaparty") one-hash)
+    (hash-put store (string->blob "teapot") two-hash)
+    (hash-put store (string->blob "teaset") three-hash)
+    (hash-put store (string->blob "tester") four-hash)
+    (hash-put store (string->blob "testing") five-hash)
+    (mdb-txn-commit (hash-store-txn store))
+    (let ((store2 (make-copy-store store))
+	  (store1 (reopen-store store)))
+      (hash-delete store2 (string->blob "teaset"))
+      (hash-delete store2 (string->blob "tester"))
+      (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	(let ((store1-thread
+	       (make-thread
+		(lambda ()
+		  (test `(#(missing "teaset" #f))
+			(map (lambda (x)
+			       (vector-set! x 1 (blob->string (vector-ref x 1)))
+			       x)
+			     (lazy-seq->list
+			      (hash-diff store1
+					 s1-in
+					 s1-out
+					 #f
+					 (string->u8vector "teaset")))))
+		  (close-input-port s1-in)
+		  (close-output-port s1-out))
+		'diff))
+	      (store2-thread
+	       (make-thread
+		(lambda ()
+		  (hash-diff-accept store2 s2-in s2-out))
+		'accept)))
+	  (thread-start! store1-thread)
+	  (thread-start! store2-thread)
+	  (thread-join! store1-thread)
+	  (thread-join! store2-thread))))))
+
+
+
 (define (select-pair-not-in-operations pairs ops)
   (let ((pair (list-ref pairs (random (length pairs)))))
     (if (member pair
@@ -2166,7 +2282,7 @@
 		    (gen-list-of
 		     (gen-pair-of (random-low-variation-key #f 20)
 				  (random-hash))
-		     1000))))
+		     100))))
 	(store (make-test-store)))
     (for-each (lambda (pair)
 		(hash-put store (car pair) (cdr pair)))
@@ -2231,4 +2347,119 @@
        (mdb-txn-commit (hash-store-txn store2))
        (mdb-env-close (mdb-txn-env (hash-store-txn store1)))
        (mdb-env-close (mdb-txn-env (hash-store-txn store2)))))))
+
+(test-group "random create/update/delete operations and bounded diff"
+  ;; test some random operations
+  (test-generative
+   ((params (gen-transform
+	     (match-lambda
+	       ((pairs operations)
+		(let* ((start-index
+			(and (not (= 0 (random 2)))
+			     (random (length operations))))
+		       (end-index
+			(and (not (= 0 (random 2)))
+			     (if start-index
+				 (+ start-index
+				    (random (- (length operations)
+					       start-index)))
+				 (random (length operations)))))
+		       (start (and start-index
+				   (second (list-ref operations start-index))))
+		       (end (and end-index
+				 (second (list-ref operations end-index)))))
+		  (list pairs operations start end))))
+	      (gen-transform
+	       (lambda (pairs)
+		 (list pairs
+		       (sort (<- (gen-random-operations pairs 25))
+			     (lambda (a b)
+			       (string<? (blob->string (second a))
+					 (blob->string (second b)))))))
+	       (gen-transform
+		(lambda (pairs)
+		  (delete-duplicates
+		   (sort pairs
+			 (lambda (a b)
+			   (string<? (blob->string (car a))
+				     (blob->string (car b)))))
+		   (lambda (a b)
+		     (blob=? (car a) (car b)))))
+		(gen-list-of
+		 (gen-pair-of (random-low-variation-key #f 20)
+			      (random-hash))
+		 100))))))
+   ;; initialize a database with random data
+   (receive (pairs operations start end) (apply values params)
+     (let ((store (make-test-store)))
+       (for-each (lambda (pair)
+		   (hash-put store (car pair) (cdr pair)))
+		 pairs)
+       (mdb-txn-commit (hash-store-txn store))
+       (mdb-env-close (mdb-txn-env (hash-store-txn store)))
+       (clear-testdb "tests/testdb-copy")
+       (store-copy-path "tests/testdb" "tests/testdb-copy")
+       (let ((store1 (open-test-store "tests/testdb"))
+	     (store2 (open-test-store "tests/testdb-copy")))
+	 (for-each
+	  (match-lambda
+	    (('create key hash)
+	     (hash-put store2 key hash))
+	    (('update key hash)
+	     (hash-put store2 key hash))
+	    (('delete key)
+	     (hash-delete store2 key)))
+	  operations)
+	 (let ((expected
+		(filter
+		 (lambda (x)
+		   (and
+		    (or (not start)
+			(string>=? (blob->string (vector-ref x 1))
+				   (blob->string start)))
+		    (or (not end)
+			(string<=? (blob->string (vector-ref x 1))
+				   (blob->string end)))))
+		 (map (match-lambda
+			(('create key hash)
+			 (vector 'new key hash))
+			(('update key hash)
+			 (vector 'different key hash))
+			(('delete key)
+			 (vector 'missing key #f)))
+		      operations))))
+	   (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+	     (let ((store1-thread
+		    (make-thread
+		     (lambda ()
+		       (test expected
+			     (sort
+			      (lazy-seq->list
+			       (hash-diff store1
+					  s1-in
+					  s1-out
+					  (and start (blob->u8vector start))
+					  (and end (blob->u8vector end))))
+			      (lambda (a b)
+				(string<? (blob->string (vector-ref a 1))
+					  (blob->string (vector-ref b 1))))))
+		       (close-input-port s1-in)
+		       (close-output-port s1-out))
+		     'diff))
+		   (store2-thread
+		    (make-thread
+		     (lambda ()
+		       (hash-diff-accept store2 s2-in s2-out)
+		       (close-input-port s2-in)
+		       (close-output-port s2-out))
+		     'accept)))
+	       (thread-start! store1-thread)
+	       (thread-start! store2-thread)
+	       (thread-join! store1-thread)
+	       (thread-join! store2-thread))))
+	 ;; tidy up
+	 (mdb-txn-commit (hash-store-txn store1))
+	 (mdb-txn-commit (hash-store-txn store2))
+	 (mdb-env-close (mdb-txn-env (hash-store-txn store1)))
+	 (mdb-env-close (mdb-txn-env (hash-store-txn store2))))))))
 

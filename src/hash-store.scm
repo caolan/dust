@@ -320,12 +320,16 @@
 ;; return the stored hash.
 (define (node-hash store node #!optional lower-bound upper-bound)
   (if (node-leaf node)
-      (node-stored-hash node)
+      (values (node-stored-hash node)
+	      (node-key node)
+	      #t)
       (if (or lower-bound
 	      upper-bound
 	      (not (node-stored-hash node)))
 	  (hash-children store node lower-bound upper-bound)
-	  (node-stored-hash node))))
+	  (values (node-stored-hash node)
+		  (node-key node)
+		  (node-leaf node)))))
 
 ;; Keep reading nodes from the cursor and moving onto the next dupsort
 ;; item until the end of the dupsort data is reached
@@ -470,20 +474,26 @@
 	 (hashes
 	  (lazy-filter-map
 	   (lambda (child)
-	     (node-hash store child lower-bound upper-bound))
+	     (let-values (((hash prefix leaf)
+			   (node-hash store child lower-bound upper-bound)))
+	       (and hash (list hash prefix leaf))))
 	   children)))
     (cond
      ;; no children in range
-     ((lazy-null? hashes) #f)
+     ((lazy-null? hashes)
+      (values #f #f #f))
      ;; only one child in range, this level wouldn't exist for this
      ;; range, so return the child hash directly
      ((lazy-null? (lazy-tail hashes))
-      (lazy-head hashes))
+      (apply values (lazy-head hashes)))
      ;; multiple child hashes, return a hash of these hashes
      (else
       (let ((hash-state (generic-hash-init size: HASH_BYTES)))
-	(lazy-each (cut generic-hash-update hash-state <>) hashes)
-	(generic-hash-final hash-state))))))
+	(lazy-each (cut generic-hash-update hash-state <>)
+		   (lazy-map car hashes))
+	(values (generic-hash-final hash-state)
+		(node-key parent)
+		#f))))))
 
 
 ;;;;; Tree ;;;;;
@@ -546,21 +556,13 @@
 (define (child-hashes store prefix #!optional lower-bound upper-bound)
   (rehash store)
   (let* ((result (lazy-last (search store prefix #f)))
-	 (node (cdr result))
-	 (output
-	  (lazy-filter-map
-	   (lambda (child)
-	     (and-let* ((hash (node-hash store child lower-bound upper-bound)))
-	       (vector (node-key child) hash (node-leaf child))))
-	   (node-children store node lower-bound upper-bound))))
-    (cond
-     ((lazy-null? output) lazy-null)
-     ((and (lazy-null? (lazy-tail output))
-	   (not (vector-ref (lazy-head output) 2)))
-      ;; only one non-leaf result, return it's children directly
-      (let ((new-prefix (vector-ref (lazy-head output) 0)))
-	(child-hashes store new-prefix lower-bound upper-bound)))
-     (else output))))
+	 (node (cdr result)))
+    (lazy-filter-map
+     (lambda (child)
+       (let-values (((hash key leaf)
+		     (node-hash store child lower-bound upper-bound)))
+	 (and hash (vector key hash leaf))))
+     (node-children store node lower-bound upper-bound))))
 
 (define (leaf-nodes store parent #!optional lower-bound upper-bound)
   (lazy-append-map
@@ -576,9 +578,9 @@
 	 (node (cdr result)))
     (lazy-map
      (lambda (x)
-       (vector (node-key x)
-	       (node-hash store x lower-bound upper-bound)
-	       (node-leaf x)))
+       (let-values (((hash key leaf)
+		     (node-hash store x lower-bound upper-bound)))
+	 (vector key hash leaf)))
      (leaf-nodes store node lower-bound upper-bound))))
      
 
@@ -753,11 +755,12 @@
 	'rehash-node
 	(list store target)
 	"Cannot re-hash leaf nodes")))
-    (update-child store
-		  (node-parent-key node)
-		  (node-subkey node)
-		  (hash-children store node)
-		  #f)
+    (let-values (((hash key leaf) (hash-children store node)))
+      (update-child store
+		    (node-parent-key node)
+		    (node-subkey node)
+		    hash
+		    #f))
     (mark-clean store target)
     (mark-dirty store (node-parent-key node))))
 
@@ -793,77 +796,70 @@
 ;; protocol versions supported by this implementation
 (define supported-versions #(1))
 
-(define (hash-diff store in out)
-  ;; (printf "~S: hash-diff: ~S ~S ~S~n" (current-thread) store in out)
+(define (hash-diff store in out #!optional lower upper)
   (let ((conn (make-connection in out (list-queue))))
     ;; start by add request for children of root node to queue
     (list-queue-add-front!
      (connection-pending conn)
-     (delay (compare-children store conn #u8{})))
+     (delay (compare-children store conn #u8{} lower upper)))
     ;; take values from queue while available and join all output into
     ;; a single lazy sequence
     (let loop ((q (connection-pending conn)))
-      ;; (printf "loop: ~S~n" q)
       (lazy-seq
-       ;; (printf "loop lazy-seq~n")
        (if (not (list-queue-empty? q))
 	   (begin
-	     ;; (print "not empty")
 	     (let ((results (force (list-queue-remove-front! q))))
 	       (lazy-append results (loop q))))
 	   (begin
-	     ;; (print "empty")
 	     '()))))))
 
-(define (compare-children store conn prefix)
-  ;; (printf "compare-children: ~S ~S ~S ~S~n" (current-thread) store conn prefix)
+(define (compare-children store conn prefix lower upper)
   (diff-children store
 		 conn
-		 (child-hashes store prefix)
-		 (request-child-hashes conn prefix)))
+		 (child-hashes store prefix lower upper)
+		 (request-child-hashes conn prefix lower upper)
+		 lower
+		 upper))
 
-(define (mark-leaf-nodes-new conn prefix)
-  ;; (printf "~S: mark-leaf-nodes-new: ~S ~S~n" (current-thread) conn prefix)
+(define (mark-leaf-nodes-new conn prefix lower upper)
   (lazy-map
    (match-lambda (#(key-r hash-r leaf-r)
 		  (vector 'new (u8vector->blob key-r) hash-r)))
-   (request-leaf-hashes conn prefix)))
+   (request-leaf-hashes conn prefix lower upper)))
 
-(define (mark-leaf-nodes-missing store prefix)
-  ;; (printf "~S: mark-leaf-nodes-missing: ~S ~S~n" (current-thread) store prefix)
+(define (mark-leaf-nodes-missing store prefix lower upper)
   (lazy-map
    (match-lambda (#(key-l hash-l leaf-l)
 		  (vector 'missing (u8vector->blob key-l) #f)))
-   (leaf-hashes store prefix)))
+   (leaf-hashes store prefix lower upper)))
 
-(define (diff-children store conn local remote)
-  ;; (printf "~S: diff-children: ~S ~S ~S ~S~n" (current-thread) store conn local remote)
+(define (diff-children store conn local remote lower upper)
   (cond
    ((lazy-null? local)
     ;; all remaining remote children are not in local store
     (lazy-filter-map
      (match-lambda
-	 (#(key-r hash-r leaf-r)
-	  (if leaf-r
-	      (vector 'new (u8vector->blob key-r) hash-r)
-	      (begin
-		(list-queue-add-back!
-		 (connection-pending conn)
-		 (delay (mark-leaf-nodes-new conn key-r)))
-		#f))))
+       (#(key-r hash-r leaf-r)
+	(if leaf-r
+	    (vector 'new (u8vector->blob key-r) hash-r)
+	    (begin
+	      (list-queue-add-back!
+	       (connection-pending conn)
+	       (delay (mark-leaf-nodes-new conn key-r lower upper)))
+	      #f))))
      remote))
    ((lazy-null? remote)
     ;; all remaining local children are not in remote store
     (lazy-filter-map
      (match-lambda
-	 (#(key-l hash-l leaf-l)
-	  (if leaf-l
-	      (vector 'missing (u8vector->blob key-l) #f)
-	      (begin
-		(list-queue-add-back!
-		 (connection-pending conn)
-		 (delay (mark-leaf-nodes-missing store key-l)))
-		#f))))
+       (#(key-l hash-l leaf-l)
+	(if leaf-l
+	    (vector 'missing (u8vector->blob key-l) #f)
+	    (begin
+	      (list-queue-add-back!
+	       (connection-pending conn)
+	       (delay (mark-leaf-nodes-missing store key-l lower upper)))
+	      #f))))
      local))
    (else
     (match-let ((#(key-l hash-l leaf-l) (lazy-head local))
@@ -876,27 +872,35 @@
 	      (diff-children store
 			     conn
 			     (lazy-tail local)
-			     (lazy-tail remote))
+			     (lazy-tail remote)
+			     lower
+			     upper)
 	      (lazy-seq
 	       (cons (vector 'different (u8vector->blob key-l) hash-r)
 		     (diff-children store
 				    conn
 				    (lazy-tail local)
-				    (lazy-tail remote))))))
+				    (lazy-tail remote)
+				    lower
+				    upper)))))
 	 ((and (not leaf-l) (not leaf-r))
 	  (if (blob=? hash-l hash-r)
 	      (diff-children store
 			     conn
 			     (lazy-tail local)
-			     (lazy-tail remote))
+			     (lazy-tail remote)
+			     lower
+			     upper)
 	      (begin
 		(list-queue-add-back!
 		 (connection-pending conn)
-		 (delay (compare-children store conn key-l)))
+		 (delay (compare-children store conn key-l lower upper)))
 		(diff-children store
 			       conn
 			       (lazy-tail local)
-			       (lazy-tail remote)))))
+			       (lazy-tail remote)
+			       lower
+			       upper))))
 	 ((and leaf-l (not leaf-r))
 	  ;; treat it like R is a prefix of L:
 	  ;; compare leaf hashes of R to the single hash of L
@@ -906,45 +910,56 @@
 		   ;; TODO: (lazy-take local 1) is the same as below?
 		   (list->lazy-seq
 		    (list (vector key-l hash-l leaf-l)))
-		   (request-leaf-hashes conn key-r))))
+		   (request-leaf-hashes conn key-r lower upper))))
 	  (diff-children store
 			 conn
 			 (lazy-tail local)
-			 (lazy-tail remote)))
+			 (lazy-tail remote)
+			 lower
+			 upper))
 	 (else ;; (and (not leaf-l) leaf-r)
 	  ;; treat it like L is prefix of R:
 	  ;; compare leaf hashes of L to the single hash of R
 	  (list-queue-add-back!
 	   (connection-pending conn)
 	   (delay (diff-leaf-hashes
-		   (leaf-hashes store key-l)
+		   (leaf-hashes store key-l lower upper)
 		   ;; TODO: (lazy-take remote 1) is the same as below?
 		   (list->lazy-seq
 		    (list (vector key-r hash-r leaf-r))))))
 	  (diff-children store
 			 conn
 			 (lazy-tail local)
-			 (lazy-tail remote)))))
+			 (lazy-tail remote)
+			 lower
+			 upper))))
        ((u8vector<? key-l key-r)
 	(if (u8vector-prefix? key-l key-r)
 	    (if leaf-l
 		(lazy-seq
 		 (cons (vector 'missing (u8vector->blob key-l) #f)
-		       (diff-children store conn (lazy-tail local) remote)))
+		       (diff-children store
+				      conn
+				      (lazy-tail local)
+				      remote
+				      lower
+				      upper)))
 		(if leaf-r
 		    (begin
 		      ;; compare leaf hashes of L to the single hash of R
 		      (list-queue-add-back!
 		       (connection-pending conn)
 		       (delay (diff-leaf-hashes
-			       (leaf-hashes store key-l)
+			       (leaf-hashes store key-l lower upper)
 			       ;; TODO: (lazy-take remote 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-r hash-r leaf-r))))))
 		      (diff-children store
 				     conn
 				     (lazy-tail local)
-				     (lazy-tail remote)))
+				     (lazy-tail remote)
+				     lower
+				     upper))
 		    (begin
 		      ;; compare children of L to a sequence containing
 		      ;; the single child R
@@ -953,29 +968,49 @@
 		       (delay (diff-children
 			       store
 			       conn
-			       (child-hashes store key-l)
+			       (child-hashes store key-l lower upper)
 			       ;; TODO: (lazy-take remote 1) is the same as below?
 			       (list->lazy-seq
-				(list (vector key-r hash-r leaf-r))))))
+				(list (vector key-r hash-r leaf-r)))
+			       lower
+			       upper)))
 		      (diff-children store
 				     conn
 				     (lazy-tail local)
-				     (lazy-tail remote)))))
+				     (lazy-tail remote)
+				     lower
+				     upper))))
 	    (if leaf-l
 		(lazy-seq
 		 (cons (vector 'missing (u8vector->blob key-l) #f)
-		       (diff-children store conn (lazy-tail local) remote)))
+		       (diff-children
+			store
+			conn
+			(lazy-tail local)
+			remote
+			lower
+			upper)))
 		(begin
 		  (list-queue-add-back!
 		   (connection-pending conn)
-		   (delay (mark-leaf-nodes-missing store key-l)))
-		  (diff-children store conn (lazy-tail local) remote)))))
+		   (delay (mark-leaf-nodes-missing store key-l lower upper)))
+		  (diff-children store
+				 conn
+				 (lazy-tail local)
+				 remote
+				 lower
+				 upper)))))
        ((u8vector>? key-l key-r)
 	(if (u8vector-prefix? key-r key-l)
 	    (if leaf-r
 		(lazy-seq
 		 (cons (vector 'new (u8vector->blob key-r) hash-r)
-		       (diff-children store conn local (lazy-tail remote))))
+		       (diff-children store
+				      conn
+				      local
+				      (lazy-tail remote)
+				      lower
+				      upper)))
 		(if leaf-l
 		    (begin
 		      ;; compare leaf hashes of R to the single hash of L
@@ -985,11 +1020,13 @@
 			       ;; TODO: (lazy-take local 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-l hash-l leaf-l)))
-			       (request-leaf-hashes conn key-r))))
+			       (request-leaf-hashes conn key-r lower upper))))
 		      (diff-children store
 				     conn
 				     (lazy-tail local)
-				     (lazy-tail remote)))
+				     (lazy-tail remote)
+				     lower
+				     upper))
 		    (begin
 		      ;; compare children of R to a sequence containing
 		      ;; the single child L
@@ -1001,23 +1038,36 @@
 			       ;; TODO: (lazy-take local 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-l hash-l leaf-l)))
-			       (request-child-hashes conn key-r))))
+			       (request-child-hashes conn key-r lower upper)
+			       lower
+			       upper)))
 		      (diff-children store
 				     conn
 				     (lazy-tail local)
-				     (lazy-tail remote)))))
+				     (lazy-tail remote)
+				     lower
+				     upper))))
 	    (if leaf-r
 		(lazy-seq
 		 (cons (vector 'new (u8vector->blob key-r) hash-r)
-		       (diff-children store conn local (lazy-tail remote))))
+		       (diff-children store
+				      conn
+				      local
+				      (lazy-tail remote)
+				      lower
+				      upper)))
 		(begin
 		  (list-queue-add-back!
 		   (connection-pending conn)
-		   (delay (mark-leaf-nodes-new conn key-r)))
-		  (diff-children store conn local (lazy-tail remote)))))))))))
+		   (delay (mark-leaf-nodes-new conn key-r lower upper)))
+		  (diff-children store
+				 conn
+				 local
+				 (lazy-tail remote)
+				 lower
+				 upper))))))))))
 
 (define (diff-leaf-hashes local remote)
-  ;; (printf "~S: diff-leaf-hashes: ~S ~S~n" (current-thread) local remote)
   (cond
    ((lazy-null? local)
     (lazy-map
@@ -1050,27 +1100,29 @@
 
 (define (receive-bencode conn)
   (let ((data (read-bencode (connection-in conn))))
-    ;; (printf "~S: received ~S~n" (current-thread) data)
     data))
 
-(define (request-leaf-hashes conn prefix)
-  ;; (printf "~S: request-leaf-hashes: ~S ~S~n" (current-thread) conn prefix)
-  (write-bencode (vector "LEAF-HASHES" (u8vector->string prefix))
+(define (request-leaf-hashes conn prefix lower upper)
+  (write-bencode (vector "LEAF-HASHES"
+			 (u8vector->string prefix)
+			 (if lower (u8vector->string lower) 0)
+			 (if upper (u8vector->string upper) 0))
 		 (connection-out conn))
   (match (receive-bencode conn)
     (#("LEAF-HASHES" __prefix__ children)
      (read-children prefix children))))
 
-(define (request-child-hashes conn prefix)
-  ;; (printf "~S: request-child-hashes: ~S ~S~n" (current-thread) conn prefix)
-  (write-bencode (vector "PREFIX" (u8vector->string prefix))
+(define (request-child-hashes conn prefix lower upper)
+  (write-bencode (vector "PREFIX"
+			 (u8vector->string prefix)
+			 (if lower (u8vector->string lower) 0)
+			 (if upper (u8vector->string upper) 0))
 		 (connection-out conn))
   (match (receive-bencode conn)
     (#("HASHES" __prefix__ children)
      (read-children prefix children))))
 
 (define (read-children prefix children)
-  ;; (printf "read-children: ~S ~S ~S~n" (current-thread) prefix children)
   (lazy-map
    (match-lambda
        (#(subkey hash leaf)
@@ -1082,21 +1134,34 @@
 
 
 (define (hash-diff-accept store in out)
-  ;; (printf "~S: hash-diff-accept: ~S ~S ~S~n" (current-thread) store in out)
   (let loop ()
     (and-let* ((data (read-bencode in)))
-      ;; (printf "~S: received ~S~n" (current-thread) data)
       (match data
-	(#("PREFIX" prefix)
-	 (write-child-hashes store (string->u8vector prefix) out)
-	 (loop))
-	(#("LEAF-HASHES" prefix)
-	 (write-leaf-hashes store (string->u8vector prefix) out)
-	 (loop))
+	(#("PREFIX" prefix lower upper)
+	 (let ((lower (and (not (equal? 0 lower))
+			   (string->u8vector lower)))
+	       (upper (and (not (equal? 0 upper))
+			   (string->u8vector upper))))
+	   (write-child-hashes store
+			       (string->u8vector prefix)
+			       out
+			       lower
+			       upper)
+	   (loop)))
+	(#("LEAF-HASHES" prefix lower upper)
+	 (let ((lower (and (not (equal? 0 lower))
+			   (string->u8vector lower)))
+	       (upper (and (not (equal? 0 upper))
+			   (string->u8vector upper))))
+	   (write-leaf-hashes store
+			      (string->u8vector prefix)
+			      out
+			      lower
+			      upper)
+	   (loop)))
 	))))
 
-(define (write-child-hashes store prefix port)
-  ;; (printf "~S: write-child-hashes: ~S ~S ~S~n" (current-thread) store prefix port)
+(define (write-child-hashes store prefix port lower upper)
   (with-output-to-port port
     (lambda ()
       (write-char #\l)
@@ -1112,12 +1177,11 @@
 		     (blob->string hash)
 		     (if leaf 1 0))
 	     )))
-       (child-hashes store prefix))
+       (child-hashes store prefix lower upper))
       (write-char #\e)
       (write-char #\e))))
 
-(define (write-leaf-hashes store prefix port)
-  ;; (printf "~S: write-leaf-hashes: ~S ~S ~S~n" (current-thread) store prefix port)
+(define (write-leaf-hashes store prefix port lower upper)
   (with-output-to-port port
     (lambda ()
       (write-char #\l)
@@ -1133,7 +1197,7 @@
 		     (blob->string hash)
 		     (if leaf 1 0))
 	     )))
-       (leaf-hashes store prefix))
+       (leaf-hashes store prefix lower upper))
       (write-char #\e)
       (write-char #\e))))
 
