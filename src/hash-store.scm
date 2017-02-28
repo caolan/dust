@@ -907,7 +907,6 @@
 	  (list-queue-add-back!
 	   (connection-pending conn)
 	   (delay (diff-leaf-hashes
-		   ;; TODO: (lazy-take local 1) is the same as below?
 		   (list->lazy-seq
 		    (list (vector key-l hash-l leaf-l)))
 		   (request-leaf-hashes conn key-r lower upper))))
@@ -924,7 +923,6 @@
 	   (connection-pending conn)
 	   (delay (diff-leaf-hashes
 		   (leaf-hashes store key-l lower upper)
-		   ;; TODO: (lazy-take remote 1) is the same as below?
 		   (list->lazy-seq
 		    (list (vector key-r hash-r leaf-r))))))
 	  (diff-children store
@@ -951,7 +949,6 @@
 		       (connection-pending conn)
 		       (delay (diff-leaf-hashes
 			       (leaf-hashes store key-l lower upper)
-			       ;; TODO: (lazy-take remote 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-r hash-r leaf-r))))))
 		      (diff-children store
@@ -969,7 +966,6 @@
 			       store
 			       conn
 			       (child-hashes store key-l lower upper)
-			       ;; TODO: (lazy-take remote 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-r hash-r leaf-r)))
 			       lower
@@ -1017,7 +1013,6 @@
 		      (list-queue-add-back!
 		       (connection-pending conn)
 		       (delay (diff-leaf-hashes
-			       ;; TODO: (lazy-take local 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-l hash-l leaf-l)))
 			       (request-leaf-hashes conn key-r lower upper))))
@@ -1035,7 +1030,6 @@
 		       (delay (diff-children
 			       store
 			       conn
-			       ;; TODO: (lazy-take local 1) is the same as below?
 			       (list->lazy-seq
 				(list (vector key-l hash-l leaf-l)))
 			       (request-child-hashes conn key-r lower upper)
