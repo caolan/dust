@@ -50,6 +50,7 @@
  ;; Diff of two hash trees
  hash-diff
  hash-diff-accept
+ hash-diff-accept-handle-message
 )
 
 
@@ -67,6 +68,7 @@
      ports
      lazy-seq
      data-structures
+     dust.connection
      dust.u8vector-utils)
 
 (foreign-declare "#include <lmdb.h>")
@@ -790,28 +792,21 @@
 ;;       (lazy-append (lazy-head seqs) (lazy-tail seqs))))
 
 
-
-(define-record connection in out pending)
-
-;; protocol versions supported by this implementation
-(define supported-versions #(1))
-
-(define (hash-diff store in out #!optional lower upper)
-  (let ((conn (make-connection in out (list-queue))))
-    ;; start by add request for children of root node to queue
-    (list-queue-add-front!
-     (connection-pending conn)
-     (delay (compare-children store conn #u8{} lower upper)))
-    ;; take values from queue while available and join all output into
-    ;; a single lazy sequence
-    (let loop ((q (connection-pending conn)))
-      (lazy-seq
-       (if (not (list-queue-empty? q))
-	   (begin
-	     (let ((results (force (list-queue-remove-front! q))))
-	       (lazy-append results (loop q))))
-	   (begin
-	     '()))))))
+(define (hash-diff store conn #!optional lower upper)
+  ;; start by add request for children of root node to queue
+  (list-queue-add-front!
+   (connection-pending conn)
+   (delay (compare-children store conn #u8{} lower upper)))
+  ;; take values from queue while available and join all output into
+  ;; a single lazy sequence
+  (let loop ((q (connection-pending conn)))
+    (lazy-seq
+     (if (not (list-queue-empty? q))
+	 (begin
+	   (let ((results (force (list-queue-remove-front! q))))
+	     (lazy-append results (loop q))))
+	 (begin
+	   '())))))
 
 (define (compare-children store conn prefix lower upper)
   (diff-children store
@@ -1092,10 +1087,6 @@
 	 (cons (vector 'new (u8vector->blob key-r) hash-r)
 	       (diff-leaf-hashes local (lazy-tail remote))))))))))
 
-(define (receive-bencode conn)
-  (let ((data (read-bencode (connection-in conn))))
-    data))
-
 (define (request-leaf-hashes conn prefix lower upper)
   (write-bencode (vector "LEAF-HASHES"
 			 (u8vector->string prefix)
@@ -1126,37 +1117,37 @@
    (list->lazy-seq (vector->list children))))
 
 
+(define (hash-diff-accept-handle-message store conn msg)
+  (match msg
+    (#("PREFIX" prefix lower upper)
+     (let ((lower (and (not (equal? 0 lower))
+		       (string->u8vector lower)))
+	   (upper (and (not (equal? 0 upper))
+		       (string->u8vector upper))))
+       (write-child-hashes store
+			   conn
+			   (string->u8vector prefix)
+			   lower
+			   upper)))
+    (#("LEAF-HASHES" prefix lower upper)
+     (let ((lower (and (not (equal? 0 lower))
+		       (string->u8vector lower)))
+	   (upper (and (not (equal? 0 upper))
+		       (string->u8vector upper))))
+       (write-leaf-hashes store
+			  conn
+			  (string->u8vector prefix)
+			  lower
+			  upper)))))
 
-(define (hash-diff-accept store in out)
+(define (hash-diff-accept store conn)
   (let loop ()
-    (and-let* ((data (read-bencode in)))
-      (match data
-	(#("PREFIX" prefix lower upper)
-	 (let ((lower (and (not (equal? 0 lower))
-			   (string->u8vector lower)))
-	       (upper (and (not (equal? 0 upper))
-			   (string->u8vector upper))))
-	   (write-child-hashes store
-			       (string->u8vector prefix)
-			       out
-			       lower
-			       upper)
-	   (loop)))
-	(#("LEAF-HASHES" prefix lower upper)
-	 (let ((lower (and (not (equal? 0 lower))
-			   (string->u8vector lower)))
-	       (upper (and (not (equal? 0 upper))
-			   (string->u8vector upper))))
-	   (write-leaf-hashes store
-			      (string->u8vector prefix)
-			      out
-			      lower
-			      upper)
-	   (loop)))
-	))))
+    (and-let* ((data (receive-bencode conn)))
+      (hash-diff-accept-handle-message store conn data)
+      (loop))))
 
-(define (write-child-hashes store prefix port lower upper)
-  (with-output-to-port port
+(define (write-child-hashes store conn prefix lower upper)
+  (with-output-to-port (connection-out conn)
     (lambda ()
       (write-char #\l)
       (write-bencode "HASHES")
@@ -1175,8 +1166,8 @@
       (write-char #\e)
       (write-char #\e))))
 
-(define (write-leaf-hashes store prefix port lower upper)
-  (with-output-to-port port
+(define (write-leaf-hashes store conn prefix lower upper)
+  (with-output-to-port (connection-out conn)
     (lambda ()
       (write-char #\l)
       (write-bencode "LEAF-HASHES")

@@ -1,4 +1,5 @@
 (use dust.hash-store
+     dust.connection
      dust.u8vector-utils
      lmdb-lolevel
      posix
@@ -1452,15 +1453,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foo") ,foo-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foo") ,foo-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1478,15 +1485,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foo") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foo") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1506,16 +1519,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "aaa") #f)
-			  #(new ,(string->blob "bbb") ,two-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "aaa") #f)
+			     #(new ,(string->blob "bbb") ,two-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1535,16 +1554,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "aaa") ,one-hash)
-			  #(missing ,(string->blob "bbb") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "aaa") ,one-hash)
+			     #(missing ,(string->blob "bbb") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1562,15 +1587,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `()
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `()
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1590,15 +1621,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(different ,(string->blob "asdf") ,data2-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(different ,(string->blob "asdf") ,data2-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1620,16 +1657,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foo") ,one-hash)
-			  #(new ,(string->blob "foobar") ,two-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foo") ,one-hash)
+			     #(new ,(string->blob "foobar") ,two-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1651,16 +1694,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foo") #f)
-			  #(missing ,(string->blob "foobar") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foo") #f)
+			     #(missing ,(string->blob "foobar") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1682,16 +1731,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foo") #f)
-			  #(missing ,(string->blob "foobar") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foo") #f)
+			     #(missing ,(string->blob "foobar") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1713,16 +1768,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foo") ,one-hash)
-			  #(new ,(string->blob "foobar") ,two-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foo") ,one-hash)
+			     #(new ,(string->blob "foobar") ,two-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1744,15 +1805,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `()
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `()
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1778,16 +1845,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "food") ,four-hash)
-			  #(missing ,(string->blob "fool") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "food") ,four-hash)
+			     #(missing ,(string->blob "fool") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1810,16 +1883,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foo") #f)
-			  #(new ,(string->blob "foobar") ,one-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foo") #f)
+			     #(new ,(string->blob "foobar") ,one-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1844,17 +1923,23 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foobab") ,three-hash)
-			  #(missing ,(string->blob "foobar") #f)
-			  #(missing ,(string->blob "foobaz") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foobab") ,three-hash)
+			     #(missing ,(string->blob "foobar") #f)
+			     #(missing ,(string->blob "foobaz") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1877,15 +1962,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foobaz") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foobaz") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1910,16 +2001,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "food") #f)
-			  #(new ,(string->blob "foobaz") ,three-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "food") #f)
+			     #(new ,(string->blob "foobaz") ,three-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1941,16 +2038,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foo") ,two-hash)
-			  #(missing ,(string->blob "foobar") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foo") ,two-hash)
+			     #(missing ,(string->blob "foobar") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -1974,17 +2077,23 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foobab") #f)
-			  #(new ,(string->blob "foobar") ,one-hash)
-			  #(new ,(string->blob "foobaz") ,two-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foobab") #f)
+			     #(new ,(string->blob "foobar") ,one-hash)
+			     #(new ,(string->blob "foobaz") ,two-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2007,15 +2116,21 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foobaz") ,two-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foobaz") ,two-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2041,16 +2156,22 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "food") ,two-hash)
-			  #(missing ,(string->blob "foobaz") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "food") ,two-hash)
+			     #(missing ,(string->blob "foobaz") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2074,17 +2195,23 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing ,(string->blob "foo") #f)
-			  #(new ,(string->blob "foobar") ,two-hash)
-			  #(new ,(string->blob "food") ,three-hash))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing ,(string->blob "foo") #f)
+			     #(new ,(string->blob "foobar") ,two-hash)
+			     #(new ,(string->blob "food") ,three-hash))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2108,17 +2235,23 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(new ,(string->blob "foo") ,one-hash)
-			  #(missing ,(string->blob "foobar") #f)
-			  #(missing ,(string->blob "food") #f))
-			(lazy-seq->list (hash-diff store1 s1-in s1-out)))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(new ,(string->blob "foo") ,one-hash)
+			     #(missing ,(string->blob "foobar") #f)
+			     #(missing ,(string->blob "food") #f))
+			   (lazy-seq->list (hash-diff store1 conn))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2158,22 +2291,27 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(different ,(string->blob "testing") ,eleven-hash)
-			  #(missing ,(string->blob "tester") #f)
-			  #(new ,(string->blob "testers") ,eight-hash))
-			(lazy-seq->list
-			 (hash-diff store1
-				    s1-in
-				    s1-out
-				    (string->u8vector "tested")
-				    (string->u8vector "tests"))))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(different ,(string->blob "testing") ,eleven-hash)
+			     #(missing ,(string->blob "tester") #f)
+			     #(new ,(string->blob "testers") ,eight-hash))
+			   (lazy-seq->list
+			    (hash-diff store1
+				       conn
+				       (string->u8vector "tested")
+				       (string->u8vector "tests")))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2181,15 +2319,6 @@
 	  (thread-join! store2-thread))))))
 
 (test-group "bounded diff 2"
-  ;; TODO: in this test, 'teap' is a prefix of both 'teaparty' and 'teapot'
-  ;; but in the function, we move forward on both during the first comparison
-  ;; meaning that 'teapot' is then incorrectly compared with 'teaset'.
-  ;; the solution might be to either skip over all keys for which 'teap' is a
-  ;; prefix instead of just the current one (it also means that diff-leaf-nodes or whatever
-  ;; won't act on just the single node, but all nodes skipped because their prefix matched),
-  ;; or perhaps just remove the optimisation that returns the nested level if there is only
-  ;; one child in bounds (this would also mean diff-children could work on prefix + subkeys
-  ;; instead of full keys I think)
   (let ((store (make-test-store))
 	(one-hash (generic-hash (string->blob "one") size: hash-size))
 	(two-hash (generic-hash (string->blob "two") size: hash-size))
@@ -2210,23 +2339,28 @@
 	(let ((store1-thread
 	       (make-thread
 		(lambda ()
-		  (test `(#(missing "teaset" #f))
-			(map (lambda (x)
-			       (vector-set! x 1 (blob->string (vector-ref x 1)))
-			       x)
-			     (lazy-seq->list
-			      (hash-diff store1
-					 s1-in
-					 s1-out
-					 #f
-					 (string->u8vector "teaset")))))
-		  (close-input-port s1-in)
-		  (close-output-port s1-out))
+		  (with-connection
+		   s1-in
+		   s1-out
+		   (lambda (conn)
+		     (test `(#(missing "teaset" #f))
+			   (map (lambda (x)
+				  (vector-set! x 1 (blob->string (vector-ref x 1)))
+				  x)
+				(lazy-seq->list
+				 (hash-diff store1
+					    conn
+					    #f
+					    (string->u8vector "teaset"))))))))
 		'diff))
 	      (store2-thread
 	       (make-thread
 		(lambda ()
-		  (hash-diff-accept store2 s2-in s2-out))
+		  (with-connection
+		   s2-in
+		   s2-out
+		   (lambda (conn)
+		     (hash-diff-accept store2 conn))))
 		'accept)))
 	  (thread-start! store1-thread)
 	  (thread-start! store2-thread)
@@ -2322,21 +2456,25 @@
 	   (let ((store1-thread
 		  (make-thread
 		   (lambda ()
-		     (test expected
-			   (sort
-			    (lazy-seq->list (hash-diff store1 s1-in s1-out))
-			    (lambda (a b)
-			      (string<? (blob->string (vector-ref a 1))
-					(blob->string (vector-ref b 1))))))
-		     (close-input-port s1-in)
-		     (close-output-port s1-out))
+		     (with-connection
+		      s1-in
+		      s1-out
+		      (lambda (conn)
+			(test expected
+			      (sort
+			       (lazy-seq->list (hash-diff store1 conn))
+			       (lambda (a b)
+				 (string<? (blob->string (vector-ref a 1))
+					   (blob->string (vector-ref b 1)))))))))
 		   'diff))
 		 (store2-thread
 		  (make-thread
 		   (lambda ()
-		     (hash-diff-accept store2 s2-in s2-out)
-		     (close-input-port s2-in)
-		     (close-output-port s2-out))
+		     (with-connection
+		      s2-in
+		      s2-out
+		      (lambda (conn)
+			(hash-diff-accept store2 conn))))
 		   'accept)))
 	     (thread-start! store1-thread)
 	     (thread-start! store2-thread)
@@ -2432,26 +2570,29 @@
 	     (let ((store1-thread
 		    (make-thread
 		     (lambda ()
-		       (test expected
-			     (sort
-			      (lazy-seq->list
-			       (hash-diff store1
-					  s1-in
-					  s1-out
-					  (and start (blob->u8vector start))
-					  (and end (blob->u8vector end))))
-			      (lambda (a b)
-				(string<? (blob->string (vector-ref a 1))
-					  (blob->string (vector-ref b 1))))))
-		       (close-input-port s1-in)
-		       (close-output-port s1-out))
+		       (with-connection
+			s1-in
+			s1-out
+			(lambda (conn)
+			  (test expected
+				(sort
+				 (lazy-seq->list
+				  (hash-diff store1
+					     conn
+					     (and start (blob->u8vector start))
+					     (and end (blob->u8vector end))))
+				 (lambda (a b)
+				   (string<? (blob->string (vector-ref a 1))
+					     (blob->string (vector-ref b 1)))))))))
 		     'diff))
 		   (store2-thread
 		    (make-thread
 		     (lambda ()
-		       (hash-diff-accept store2 s2-in s2-out)
-		       (close-input-port s2-in)
-		       (close-output-port s2-out))
+		       (with-connection
+			s2-in
+			s2-out
+			(lambda (conn)
+			  (hash-diff-accept store2 conn))))
 		     'accept)))
 	       (thread-start! store1-thread)
 	       (thread-start! store2-thread)
@@ -2462,4 +2603,3 @@
 	 (mdb-txn-commit (hash-store-txn store2))
 	 (mdb-env-close (mdb-txn-env (hash-store-txn store1)))
 	 (mdb-env-close (mdb-txn-env (hash-store-txn store2))))))))
-
