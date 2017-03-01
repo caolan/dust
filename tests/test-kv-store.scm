@@ -214,14 +214,16 @@
 	   (thread-start! store2-thread)
 	   (thread-join! store1-thread)
 	   (thread-join! store2-thread)))
-       ;; TODO: test all keys/values match up using (kv-stream)?
        (with-kv-store env1 0
 	(lambda (write-store1)
 	  (with-kv-store env2 0
 	   (lambda (write-store2)
 	     (test "root hashes are same after sync"
 		   (root-hash (kv-store-hash-store write-store1))
-		   (root-hash (kv-store-hash-store write-store2)))))))
+		   (root-hash (kv-store-hash-store write-store2)))
+	     (test "keys/values match up"
+		   (lazy-seq->list (kv-pairs write-store1))
+		   (lazy-seq->list (kv-pairs write-store2)))))))
        ;; tidy up
        (mdb-env-close env1)
        (mdb-env-close env2)))))
