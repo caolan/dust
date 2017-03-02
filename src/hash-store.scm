@@ -1094,6 +1094,7 @@
 			 (if upper (u8vector->string upper) 0))
 		 (connection-out conn))
   (match (receive-bencode conn)
+    ;; TODO: use ,prefix instead of __prefix_ to sanity check returned values?
     (#("LEAF-HASHES" __prefix__ children)
      (read-children prefix children))))
 
@@ -1104,6 +1105,7 @@
 			 (if upper (u8vector->string upper) 0))
 		 (connection-out conn))
   (match (receive-bencode conn)
+    ;; TODO: use ,prefix instead of __prefix_ to sanity check returned values?
     (#("HASHES" __prefix__ children)
      (read-children prefix children))))
 

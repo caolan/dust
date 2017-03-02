@@ -27,7 +27,8 @@
      miscmacros
      data-structures
      dust.connection
-     dust.hash-store)
+     dust.hash-store
+     dust.u8vector-utils)
 
 (define-constant DBI_NAME "kv")
 
@@ -69,23 +70,29 @@
 	   key)
   (hash-delete (kv-store-hash-store store) key))
 
-(define (kv-pairs* cursor)
-  (let loop ((op MDB_FIRST))
-    (condition-case
-	(begin
-	  (mdb-cursor-get cursor #f #f op)
-	  (lazy-seq
-	   (cons (cons (mdb-cursor-key cursor)
-		       (mdb-cursor-data cursor))
-		 (loop MDB_NEXT))))
-      ((exn lmdb MDB_NOTFOUND) lazy-null))))
-
-(define (kv-pairs store)
-  (kv-pairs*
-   (mdb-cursor-open (kv-store-txn store)
-		    (kv-store-dbi store))))
-
-
+(define (kv-pairs store #!optional start end)
+  (when (and start end)
+    (assert (string<=? (blob->string start)
+		       (blob->string end))))
+  (let ((cursor (mdb-cursor-open (kv-store-txn store)
+				 (kv-store-dbi store))))
+    (let loop ((first #t))
+      (condition-case
+	  (begin
+	    (if first
+		(if start
+		    (mdb-cursor-get cursor start #f MDB_SET_RANGE)
+		    (mdb-cursor-get cursor #f #f MDB_FIRST))
+		(mdb-cursor-get cursor #f #f MDB_NEXT))
+	    (lazy-seq
+	     (let ((key (mdb-cursor-key cursor)))
+	       (if (and end
+			(string>? (blob->string key)
+				  (blob->string end)))
+		   lazy-null
+		   (cons (cons key (mdb-cursor-data cursor))
+			 (loop #f))))))
+	((exn lmdb MDB_NOTFOUND) lazy-null)))))
 
 (define (kv-env-rehash env)
   (with-kv-store env 0 (compose rehash kv-store-hash-store)))
@@ -122,13 +129,24 @@
   (kv-env-rehash env)
   (with-kv-store env MDB_RDONLY
     (lambda (read-store)
-      (write-bencode (vector "SYNC" supported-versions)
-		     (connection-out conn))
+      (write-bencode
+       (vector "SYNC"
+	       supported-versions
+	       (if lower-bound
+		   (u8vector->string lower-bound)
+		   0)
+	       (if upper-bound
+		   (u8vector->string upper-bound)
+		   0))
+       (connection-out conn))
       (match (receive-bencode conn)
 	(#("ROOT" version hash)
 	 ;; TODO: test sync with empty store
-	 (unless (blob=? (string->blob hash)
-			 (root-hash (kv-store-hash-store read-store)))
+	 (unless (equal? (and (not (equal? 0 hash))
+			      (string->blob hash))
+			 (root-hash (kv-store-hash-store read-store)
+				    lower-bound
+				    upper-bound))
 	   (lazy-each
 	    (match-lambda
 		(#(type key remote-hash)
@@ -142,11 +160,15 @@
 
 (define (kv-env-sync-accept-handle-message store conn msg)
   (match msg
-    (#("SYNC" #(1))
+    (#("SYNC" #(1) lower upper)
      (write-bencode
       ;; TODO: test sync with empty store
-      (vector "ROOT" 1 (blob->string
-			(root-hash (kv-store-hash-store store))))
+      (let ((hash (root-hash (kv-store-hash-store store)
+			     (and (not (equal? 0 lower))
+				  (string->u8vector lower))
+			     (and (not (equal? 0 upper))
+				  (string->u8vector upper)))))
+	(vector "ROOT" 1 (if hash (blob->string hash) 0)))
       (connection-out conn)))
     (#("GET" key)
      (write-bencode
