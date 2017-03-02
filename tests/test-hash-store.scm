@@ -23,7 +23,7 @@
   (let ((env (mdb-env-create)))
     (mdb-env-set-mapsize env 10000000)
     (mdb-env-set-maxdbs env 3)
-    (mdb-env-open env path 0
+    (mdb-env-open env path MDB_NOSYNC
 		  (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
     env))
 

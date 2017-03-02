@@ -6,6 +6,7 @@
  kv-store-txn
  kv-store-dbi
  kv-store-hash-store
+ kv-dbi-open
  with-kv-store
  kv-put
  kv-get
@@ -37,8 +38,11 @@
 (define (kv-store-open txn)
   (make-kv-store
    txn
-   (mdb-dbi-open txn DBI_NAME MDB_CREATE)
+   (kv-dbi-open txn)
    (hash-store-open txn)))
+
+(define (kv-dbi-open txn)
+  (mdb-dbi-open txn DBI_NAME MDB_CREATE))
 
 (define (with-kv-store env flags thunk)
   (let* ((txn (mdb-txn-begin env #f flags))

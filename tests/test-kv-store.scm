@@ -22,7 +22,7 @@
   (let ((env (mdb-env-create)))
     (mdb-env-set-mapsize env 10000000)
     (mdb-env-set-maxdbs env 3)
-    (mdb-env-open env path 0
+    (mdb-env-open env path MDB_NOSYNC
 		  (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
     env))
 
@@ -175,33 +175,37 @@
 			 ops)
 		   (- n 1))))))))
 
+(define (clear-env env)
+  (let ((txn (mdb-txn-begin env #f 0)))
+    (mdb-drop txn (kv-dbi-open txn) 0)
+    (mdb-drop txn (hashes-dbi-open txn) 0)
+    (mdb-drop txn (dirty-dbi-open txn) 0)
+    (mdb-txn-commit txn)))
+
 (test-group "sync"
-  (test-generative
-   ((params
-     (gen-transform
-      (lambda (pairs)
-	(list pairs (<- (gen-random-operations pairs 25))))
-      (gen-transform
-       (lambda (pairs)
-	 (delete-duplicates
-	  (sort pairs
-		(lambda (a b)
-		  (string<? (blob->string (car a))
-			    (blob->string (car b)))))
-	  (lambda (a b)
-	    (blob=? (car a) (car b)))))
-       (gen-list-of
-	(gen-pair-of (random-low-variation-key #f 20)
-		     (random-data 100))
-	100)))))
-   (receive (pairs operations) (apply values params)
-     ;; TODO: try using mdb_drop calls to clean up databases instead
-     ;; of closing + re-opening evey time and see if that speeds up
-     ;; this test?
-     (clear-testdb "tests/testdb")
-     (clear-testdb "tests/testdb2")
-     (let ((env1 (open-test-env "tests/testdb"))
-	   (env2 (open-test-env "tests/testdb2")))
+  (let ((env1 (open-test-env "tests/testdb"))
+	(env2 (open-test-env "tests/testdb2")))
+    (test-generative
+     ((params
+       (gen-transform
+	(lambda (pairs)
+	  (list pairs (<- (gen-random-operations pairs 25))))
+	(gen-transform
+	 (lambda (pairs)
+	   (delete-duplicates
+	    (sort pairs
+		  (lambda (a b)
+		    (string<? (blob->string (car a))
+			      (blob->string (car b)))))
+	    (lambda (a b)
+	      (blob=? (car a) (car b)))))
+	 (gen-list-of
+	  (gen-pair-of (random-low-variation-key #f 20)
+		       (random-data 100))
+	  100)))))
+     (receive (pairs operations) (apply values params)
+       (clear-env env1)
+       (clear-env env2)
        (with-kv-store env1 0
 	(lambda (write-store1)
 	  (with-kv-store env2 0
@@ -255,116 +259,116 @@
 		   (root-hash (kv-store-hash-store write-store2)))
 	     (test "keys/values match up"
 		   (lazy-seq->list (kv-pairs write-store1))
-		   (lazy-seq->list (kv-pairs write-store2)))))))
-       ;; tidy up
-       (mdb-env-close env1)
-       (mdb-env-close env2)))))
+		   (lazy-seq->list (kv-pairs write-store2)))))))))
+    ;; tidy up
+    (mdb-env-close env1)
+    (mdb-env-close env2)))
 
 
 (test-group "bounded sync"
-  (test-generative
-   ((params
-     (gen-transform
-      (match-lambda
-	  ((pairs operations)
-	   (let* ((rnd (random 4))
-		  (start-index
-		   (+ 1 (random (- (length operations) 3))))
-		  (end-index
-		   (if start-index
-		       (+ start-index
-			  1
-			  (random (- (- (length operations) 2)
-				     start-index)))
-		       (+ 1 (random (- (length operations) 2)))))
-		  (start (and (not (= rnd 0))
-			      (second (list-ref operations start-index))))
-		  (end (and (not (= rnd 1))
-			    (second (list-ref operations end-index)))))
-	     (list pairs
-		   operations
-		   (and start (blob->u8vector start))
-		   (and end (blob->u8vector end))))))
-      (gen-transform
-       (lambda (pairs)
-	 (list pairs
-	       (sort (<- (gen-random-operations pairs 25))
-		     (lambda (a b)
-		       (string<? (blob->string (second a))
-				 (blob->string (second b)))))))
+  (let ((env1 (open-test-env "tests/testdb"))
+	(env2 (open-test-env "tests/testdb2")))
+    (test-generative
+     ((params
        (gen-transform
-	(lambda (pairs)
-	  (delete-duplicates
-	   (sort pairs
-		 (lambda (a b)
-		   (string<? (blob->string (car a))
-			     (blob->string (car b)))))
-	   (lambda (a b)
-	     (blob=? (car a) (car b)))))
-	(gen-list-of
-	 (gen-pair-of (random-low-variation-key #f 20)
-		      (random-data 100))
-	 100))))))
-   (receive (pairs operations start end) (apply values params)
-     (clear-testdb "tests/testdb")
-     (clear-testdb "tests/testdb2")
-     (let ((env1 (open-test-env "tests/testdb"))
-	   (env2 (open-test-env "tests/testdb2"))
-	   (store1-data-before-start #f)
-	   (store1-data-in-bounds #f)
-	   (store1-data-after-end #f)
-	   (store2-data #f))
-       (with-kv-store env1 0
-	(lambda (write-store1)
-	  (with-kv-store env2 0
-	   (lambda (write-store2)
-	     ;; pre-load databases
-	     (for-each (lambda (pair)
-			 (kv-put write-store1 (car pair) (cdr pair))
-			 (kv-put write-store2 (car pair) (cdr pair)))
-		       pairs)
-	     (for-each
-	      (match-lambda
-		  (('create key value)
-		   (kv-put write-store2 key value))
-		(('update key value)
-		 (kv-put write-store2 key value))
-		(('delete key)
-		 (kv-delete write-store2 key)))
-	      operations)
-	     (test-assert "root hashes for bounds are different at start"
-	       (not (equal?
-		     (root-hash (kv-store-hash-store write-store1)
-				start
-				end)
-		     (root-hash (kv-store-hash-store write-store2)
-				start
-				end))))
-	     (test-assert "root hashes are different at start"
-	       (not (equal?
-		     (root-hash (kv-store-hash-store write-store1))
-		     (root-hash (kv-store-hash-store write-store2)))))
-	     ;; store some data pre-sync for comparison afterwards
-	     (set! store1-data-before-start
-	       (and start
-		    (lazy-seq->list
-		     (lazy-filter (lambda (x) (string<? (blob->string (car x))
-							(u8vector->string start)))
-				  (kv-pairs write-store1)))))
-	     (set! store1-data-in-bounds
-	       (lazy-seq->list
-		(kv-pairs write-store1
-			  (and start (u8vector->blob start))
-			  (and end (u8vector->blob end)))))
-	     (set! store1-data-after-end
-	       (and end
-		    (lazy-seq->list
-		     (lazy-filter (lambda (x) (string>? (blob->string (car x))
-							(u8vector->string end)))
-				  (kv-pairs write-store1)))))
-	     (set! store2-data
-	       (lazy-seq->list (kv-pairs write-store2)))
-	     ))))
+	(match-lambda
+	    ((pairs operations)
+	     (let* ((rnd (random 4))
+		    (start-index
+		     (+ 1 (random (- (length operations) 3))))
+		    (end-index
+		     (if start-index
+			 (+ start-index
+			    1
+			    (random (- (- (length operations) 2)
+				       start-index)))
+			 (+ 1 (random (- (length operations) 2)))))
+		    (start (and (not (= rnd 0))
+				(second (list-ref operations start-index))))
+		    (end (and (not (= rnd 1))
+			      (second (list-ref operations end-index)))))
+	       (list pairs
+		     operations
+		     (and start (blob->u8vector start))
+		     (and end (blob->u8vector end))))))
+	(gen-transform
+	 (lambda (pairs)
+	   (list pairs
+		 (sort (<- (gen-random-operations pairs 25))
+		       (lambda (a b)
+			 (string<? (blob->string (second a))
+				   (blob->string (second b)))))))
+	 (gen-transform
+	  (lambda (pairs)
+	    (delete-duplicates
+	     (sort pairs
+		   (lambda (a b)
+		     (string<? (blob->string (car a))
+			       (blob->string (car b)))))
+	     (lambda (a b)
+	       (blob=? (car a) (car b)))))
+	  (gen-list-of
+	   (gen-pair-of (random-low-variation-key #f 20)
+			(random-data 100))
+	   100))))))
+     (receive (pairs operations start end) (apply values params)
+       (clear-env env1)
+       (clear-env env2)
+       (let ((store1-data-before-start #f)
+	     (store1-data-in-bounds #f)
+	     (store1-data-after-end #f)
+	     (store2-data #f))
+	 (with-kv-store env1 0
+			(lambda (write-store1)
+			  (with-kv-store env2 0
+					 (lambda (write-store2)
+					   ;; pre-load databases
+					   (for-each (lambda (pair)
+						       (kv-put write-store1 (car pair) (cdr pair))
+						       (kv-put write-store2 (car pair) (cdr pair)))
+						     pairs)
+					   (for-each
+					    (match-lambda
+						(('create key value)
+						 (kv-put write-store2 key value))
+					      (('update key value)
+					       (kv-put write-store2 key value))
+					      (('delete key)
+					       (kv-delete write-store2 key)))
+					    operations)
+					   (test-assert "root hashes for bounds are different at start"
+					     (not (equal?
+						   (root-hash (kv-store-hash-store write-store1)
+							      start
+							      end)
+						   (root-hash (kv-store-hash-store write-store2)
+							      start
+							      end))))
+					   (test-assert "root hashes are different at start"
+					     (not (equal?
+						   (root-hash (kv-store-hash-store write-store1))
+						   (root-hash (kv-store-hash-store write-store2)))))
+					   ;; store some data pre-sync for comparison afterwards
+					   (set! store1-data-before-start
+					     (and start
+						  (lazy-seq->list
+						   (lazy-filter (lambda (x) (string<? (blob->string (car x))
+										      (u8vector->string start)))
+								(kv-pairs write-store1)))))
+					   (set! store1-data-in-bounds
+					     (lazy-seq->list
+					      (kv-pairs write-store1
+							(and start (u8vector->blob start))
+							(and end (u8vector->blob end)))))
+					   (set! store1-data-after-end
+					     (and end
+						  (lazy-seq->list
+						   (lazy-filter (lambda (x) (string>? (blob->string (car x))
+										      (u8vector->string end)))
+								(kv-pairs write-store1)))))
+					   (set! store2-data
+					     (lazy-seq->list (kv-pairs write-store2)))
+					   ))))
        	 (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
 	   (let ((store1-thread
 		  (make-thread
@@ -428,8 +432,8 @@
 						       (and start (u8vector->blob start))
 						       (and end (u8vector->blob end)))))))
 			     (test "no data has changed in store2 after sync"
-			       store2-data
-			       (lazy-seq->list (kv-pairs write-store2)))
+				   store2-data
+				   (lazy-seq->list (kv-pairs write-store2)))
 			     (test "data in bounds is now same in store1 and store2"
 				   (lazy-seq->list
 				    (kv-pairs write-store1
@@ -438,8 +442,7 @@
 				   (lazy-seq->list
 				    (kv-pairs write-store2
 					      (and start (u8vector->blob start))
-					      (and end (u8vector->blob end)))))
-			     ))))
-	 ;; tidy up
-	 (mdb-env-close env1)
-	 (mdb-env-close env2)))))
+					      (and end (u8vector->blob end))))))))))))
+    ;; tidy up
+    (mdb-env-close env1)
+    (mdb-env-close env2)))
