@@ -272,25 +272,25 @@
      ((params
        (gen-transform
 	(match-lambda
-	    ((pairs operations)
-	     (let* ((rnd (random 4))
-		    (start-index
-		     (+ 1 (random (- (length operations) 3))))
-		    (end-index
-		     (if start-index
-			 (+ start-index
-			    1
-			    (random (- (- (length operations) 2)
-				       start-index)))
-			 (+ 1 (random (- (length operations) 2)))))
-		    (start (and (not (= rnd 0))
-				(second (list-ref operations start-index))))
-		    (end (and (not (= rnd 1))
-			      (second (list-ref operations end-index)))))
-	       (list pairs
-		     operations
-		     (and start (blob->u8vector start))
-		     (and end (blob->u8vector end))))))
+	  ((pairs operations)
+	   (let* ((rnd (random 4))
+		  (start-index
+		   (+ 1 (random (- (length operations) 3))))
+		  (end-index
+		   (if start-index
+		       (+ start-index
+			  1
+			  (random (- (- (length operations) 2)
+				     start-index)))
+		       (+ 1 (random (- (length operations) 2)))))
+		  (start (and (not (= rnd 0))
+			      (second (list-ref operations start-index))))
+		  (end (and (not (= rnd 1))
+			    (second (list-ref operations end-index)))))
+	     (list pairs
+		   operations
+		   (and start (blob->u8vector start))
+		   (and end (blob->u8vector end))))))
 	(gen-transform
 	 (lambda (pairs)
 	   (list pairs
@@ -318,57 +318,59 @@
 	     (store1-data-in-bounds #f)
 	     (store1-data-after-end #f)
 	     (store2-data #f))
-	 (with-kv-store env1 0
-			(lambda (write-store1)
-			  (with-kv-store env2 0
-					 (lambda (write-store2)
-					   ;; pre-load databases
-					   (for-each (lambda (pair)
-						       (kv-put write-store1 (car pair) (cdr pair))
-						       (kv-put write-store2 (car pair) (cdr pair)))
-						     pairs)
-					   (for-each
-					    (match-lambda
-						(('create key value)
-						 (kv-put write-store2 key value))
-					      (('update key value)
-					       (kv-put write-store2 key value))
-					      (('delete key)
-					       (kv-delete write-store2 key)))
-					    operations)
-					   (test-assert "root hashes for bounds are different at start"
-					     (not (equal?
-						   (root-hash (kv-store-hash-store write-store1)
-							      start
-							      end)
-						   (root-hash (kv-store-hash-store write-store2)
-							      start
-							      end))))
-					   (test-assert "root hashes are different at start"
-					     (not (equal?
-						   (root-hash (kv-store-hash-store write-store1))
-						   (root-hash (kv-store-hash-store write-store2)))))
-					   ;; store some data pre-sync for comparison afterwards
-					   (set! store1-data-before-start
-					     (and start
-						  (lazy-seq->list
-						   (lazy-filter (lambda (x) (string<? (blob->string (car x))
-										      (u8vector->string start)))
-								(kv-pairs write-store1)))))
-					   (set! store1-data-in-bounds
-					     (lazy-seq->list
-					      (kv-pairs write-store1
-							(and start (u8vector->blob start))
-							(and end (u8vector->blob end)))))
-					   (set! store1-data-after-end
-					     (and end
-						  (lazy-seq->list
-						   (lazy-filter (lambda (x) (string>? (blob->string (car x))
-										      (u8vector->string end)))
-								(kv-pairs write-store1)))))
-					   (set! store2-data
-					     (lazy-seq->list (kv-pairs write-store2)))
-					   ))))
+	 (with-kv-store
+	  env1 0
+	  (lambda (write-store1)
+	    (with-kv-store
+	     env2 0
+	     (lambda (write-store2)
+	       ;; pre-load databases
+	       (for-each (lambda (pair)
+			   (kv-put write-store1 (car pair) (cdr pair))
+			   (kv-put write-store2 (car pair) (cdr pair)))
+			 pairs)
+	       (for-each
+		(match-lambda
+		  (('create key value)
+		   (kv-put write-store2 key value))
+		  (('update key value)
+		   (kv-put write-store2 key value))
+		  (('delete key)
+		   (kv-delete write-store2 key)))
+		operations)
+	       (test-assert "root hashes for bounds are different at start"
+		 (not (equal?
+		       (root-hash (kv-store-hash-store write-store1)
+				  start
+				  end)
+		       (root-hash (kv-store-hash-store write-store2)
+				  start
+				  end))))
+	       (test-assert "root hashes are different at start"
+		 (not (equal?
+		       (root-hash (kv-store-hash-store write-store1))
+		       (root-hash (kv-store-hash-store write-store2)))))
+	       ;; store some data pre-sync for comparison afterwards
+	       (set! store1-data-before-start
+		 (and start
+		      (lazy-seq->list
+		       (lazy-filter (lambda (x) (string<? (blob->string (car x))
+							  (u8vector->string start)))
+				    (kv-pairs write-store1)))))
+	       (set! store1-data-in-bounds
+		 (lazy-seq->list
+		  (kv-pairs write-store1
+			    (and start (u8vector->blob start))
+			    (and end (u8vector->blob end)))))
+	       (set! store1-data-after-end
+		 (and end
+		      (lazy-seq->list
+		       (lazy-filter (lambda (x) (string>? (blob->string (car x))
+							  (u8vector->string end)))
+				    (kv-pairs write-store1)))))
+	       (set! store2-data
+		 (lazy-seq->list (kv-pairs write-store2)))
+	       ))))
        	 (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
 	   (let ((store1-thread
 		  (make-thread
@@ -395,54 +397,177 @@
 	     (thread-start! store2-thread)
 	     (thread-join! store1-thread)
 	     (thread-join! store2-thread)))
-	 (with-kv-store env1 0
-			(lambda (write-store1)
-			  (with-kv-store
-			   env2 0
-			   (lambda (write-store2)
-			     (test-assert "root hashes are still different after sync"
-			       (not (equal?
-				     (root-hash (kv-store-hash-store write-store1))
-				     (root-hash (kv-store-hash-store write-store2)))))
-			     (test "root hashes for bounds are same after sync"
-				   (root-hash (kv-store-hash-store write-store1) start end)
-				   (root-hash (kv-store-hash-store write-store2) start end))
-			     (test "data before lower bound is unchanged in store1 after sync"
-				   (and start store1-data-before-start)
-				   (and start
-					(lazy-seq->list
-					 (lazy-filter
-					  (lambda (x)
-					    (string<? (blob->string (car x))
-						      (u8vector->string start)))
-					  (kv-pairs write-store1)))))
-			     (test "data after upper bound is unchanged in store1 after sync"
-				   (and end store1-data-after-end)
-				   (and end
-					(lazy-seq->list
-					 (lazy-filter
-					  (lambda (x)
-					    (string>? (blob->string (car x))
-						      (u8vector->string end)))
-					  (kv-pairs write-store1)))))
-			     (test-assert "data in bounds has now changed in store1 after sync"
-			       (not (equal? store1-data-in-bounds
-					    (lazy-seq->list
-					     (kv-pairs write-store1
-						       (and start (u8vector->blob start))
-						       (and end (u8vector->blob end)))))))
-			     (test "no data has changed in store2 after sync"
-				   store2-data
-				   (lazy-seq->list (kv-pairs write-store2)))
-			     (test "data in bounds is now same in store1 and store2"
-				   (lazy-seq->list
-				    (kv-pairs write-store1
-					      (and start (u8vector->blob start))
-					      (and end (u8vector->blob end))))
-				   (lazy-seq->list
-				    (kv-pairs write-store2
-					      (and start (u8vector->blob start))
-					      (and end (u8vector->blob end))))))))))))
+	 (with-kv-store
+	  env1 0
+	  (lambda (write-store1)
+	    (with-kv-store
+	     env2 0
+	     (lambda (write-store2)
+	       (test-assert "root hashes are still different after sync"
+		 (not (equal?
+		       (root-hash (kv-store-hash-store write-store1))
+		       (root-hash (kv-store-hash-store write-store2)))))
+	       (test "root hashes for bounds are same after sync"
+		     (root-hash (kv-store-hash-store write-store1) start end)
+		     (root-hash (kv-store-hash-store write-store2) start end))
+	       (test "data before lower bound is unchanged in store1 after sync"
+		     (and start store1-data-before-start)
+		     (and start
+			  (lazy-seq->list
+			   (lazy-filter
+			    (lambda (x)
+			      (string<? (blob->string (car x))
+					(u8vector->string start)))
+			    (kv-pairs write-store1)))))
+	       (test "data after upper bound is unchanged in store1 after sync"
+		     (and end store1-data-after-end)
+		     (and end
+			  (lazy-seq->list
+			   (lazy-filter
+			    (lambda (x)
+			      (string>? (blob->string (car x))
+					(u8vector->string end)))
+			    (kv-pairs write-store1)))))
+	       (test-assert "data in bounds has now changed in store1 after sync"
+		 (not (equal? store1-data-in-bounds
+			      (lazy-seq->list
+			       (kv-pairs write-store1
+					 (and start (u8vector->blob start))
+					 (and end (u8vector->blob end)))))))
+	       (test "no data has changed in store2 after sync"
+		     store2-data
+		     (lazy-seq->list (kv-pairs write-store2)))
+	       (test "data in bounds is now same in store1 and store2"
+		     (lazy-seq->list
+		      (kv-pairs write-store1
+				(and start (u8vector->blob start))
+				(and end (u8vector->blob end))))
+		     (lazy-seq->list
+		      (kv-pairs write-store2
+				(and start (u8vector->blob start))
+				(and end (u8vector->blob end))))))))))))
     ;; tidy up
     (mdb-env-close env1)
     (mdb-env-close env2)))
+
+(test-group "sync from empty store"
+  (let ((env1 (open-test-env "tests/testdb"))
+	(env2 (open-test-env "tests/testdb2"))
+	(pairs (<- (gen-transform
+		    (lambda (pairs)
+		      (delete-duplicates
+		       (sort pairs
+			     (lambda (a b)
+			       (string<? (blob->string (car a))
+					 (blob->string (car b)))))
+		       (lambda (a b)
+			 (blob=? (car a) (car b)))))
+		    (gen-list-of
+		     (gen-pair-of (random-low-variation-key #f 20)
+				  (random-data 100))
+		     100)))))
+    (clear-env env1)
+    (clear-env env2)
+    (with-kv-store
+     env1 0
+     (lambda (write-store1)
+       (with-kv-store
+	env2 0
+	(lambda (write-store2)
+	  ;; pre-load store1
+	  (for-each (lambda (pair)
+		      (kv-put write-store1 (car pair) (cdr pair)))
+		    pairs)))))
+    (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+      (let ((store1-thread
+	     (make-thread
+	      (lambda ()
+		(with-connection
+		 s1-in
+		 s1-out
+		 (lambda (conn)
+		   (kv-env-sync env1 conn))))
+	      'local))
+	    (store2-thread
+	     (make-thread
+	      (lambda ()
+		(with-connection
+		 s2-in
+		 s2-out
+		 (lambda (conn)
+		   (kv-env-sync-accept env2 conn))))
+	      'remote)))
+	(thread-start! store1-thread)
+	(thread-start! store2-thread)
+	(thread-join! store1-thread)
+	(thread-join! store2-thread)))
+    (with-kv-store
+     env1 0
+     (lambda (write-store1)
+       (with-kv-store
+	env2 0
+	(lambda (write-store2)
+	  (test "data is same after sync"
+		(lazy-seq->list (kv-pairs write-store1))
+		(lazy-seq->list (kv-pairs write-store2)))))))))
+
+(test-group "sync to empty store"
+  (let ((env1 (open-test-env "tests/testdb"))
+	(env2 (open-test-env "tests/testdb2"))
+	(pairs (<- (gen-transform
+		    (lambda (pairs)
+		      (delete-duplicates
+		       (sort pairs
+			     (lambda (a b)
+			       (string<? (blob->string (car a))
+					 (blob->string (car b)))))
+		       (lambda (a b)
+			 (blob=? (car a) (car b)))))
+		    (gen-list-of
+		     (gen-pair-of (random-low-variation-key #f 20)
+				  (random-data 100))
+		     100)))))
+    (clear-env env1)
+    (clear-env env2)
+    (with-kv-store
+     env1 0
+     (lambda (write-store1)
+       (with-kv-store
+	env2 0
+	(lambda (write-store2)
+	  ;; pre-load store2
+	  (for-each (lambda (pair)
+		      (kv-put write-store2 (car pair) (cdr pair)))
+		    pairs)))))
+    (let-values (((s1-in s1-out s2-in s2-out) (unix-pair)))
+      (let ((store1-thread
+	     (make-thread
+	      (lambda ()
+		(with-connection
+		 s1-in
+		 s1-out
+		 (lambda (conn)
+		   (kv-env-sync env1 conn))))
+	      'local))
+	    (store2-thread
+	     (make-thread
+	      (lambda ()
+		(with-connection
+		 s2-in
+		 s2-out
+		 (lambda (conn)
+		   (kv-env-sync-accept env2 conn))))
+	      'remote)))
+	(thread-start! store1-thread)
+	(thread-start! store2-thread)
+	(thread-join! store1-thread)
+	(thread-join! store2-thread)))
+    (with-kv-store
+     env1 0
+     (lambda (write-store1)
+       (with-kv-store
+	env2 0
+	(lambda (write-store2)
+	  (test "data is same after sync"
+		(lazy-seq->list (kv-pairs write-store1))
+		(lazy-seq->list (kv-pairs write-store2)))))))))

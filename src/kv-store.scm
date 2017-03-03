@@ -125,7 +125,6 @@
 ;; protocol versions supported by this implementation
 (define supported-versions #(1))
 
-;; TODO: bounded sync
 (define (kv-env-sync env conn #!key
 		     (change-handler default-change-handler)
 		     lower-bound
@@ -145,7 +144,6 @@
        (connection-out conn))
       (match (receive-bencode conn)
 	(#("ROOT" version hash)
-	 ;; TODO: test sync with empty store
 	 (unless (equal? (and (not (equal? 0 hash))
 			      (string->blob hash))
 			 (root-hash (kv-store-hash-store read-store)
@@ -166,7 +164,6 @@
   (match msg
     (#("SYNC" #(1) lower upper)
      (write-bencode
-      ;; TODO: test sync with empty store
       (let ((hash (root-hash (kv-store-hash-store store)
 			     (and (not (equal? 0 lower))
 				  (string->u8vector lower))
