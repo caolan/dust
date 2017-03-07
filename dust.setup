@@ -19,12 +19,18 @@
 	 -o "dust.kv-store.so")
 (compile -O2 -d0 -s "dust.kv-store.import.scm")
 
+(compile -O2 -d1 -inline -s "../src/event-store.scm" -Iinclude -llmdb -J
+	 -o "dust.event-store.so")
+(compile -O2 -d0 -s "dust.event-store.import.scm")
+
 (install-extension
   'lmdb-merkle
   '("dust.hash-store.so"
     "dust.hash-store.import.so"
     "dust.kv-store.so"
     "dust.kv-store.import.so"
+    "dust.event-store.so"
+    "dust.event-store.import.so"
     "dust.connection.so"
     "dust.connection.import.so"
     "dust.u8vector-utils.so"

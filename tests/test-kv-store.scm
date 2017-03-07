@@ -68,6 +68,86 @@
 	  (hash-get (kv-store-hash-store store) (string->blob "foo")))
     ))
 
+(test-group "kv-keys"
+  (let ((store (make-test-store)))
+    (kv-put store (string->blob "foo") (string->blob "one"))
+    (kv-put store (string->blob "bar") (string->blob "two"))
+    (kv-put store (string->blob "baz") (string->blob "three"))
+    (kv-put store (string->blob "qux") (string->blob "four"))
+    (test "all"
+	  `(,(string->blob "bar")
+	    ,(string->blob "baz")
+	    ,(string->blob "foo")
+	    ,(string->blob "qux"))
+	  (lazy-seq->list (kv-keys store)))
+    (test "start"
+	  `(,(string->blob "baz")
+	    ,(string->blob "foo")
+	    ,(string->blob "qux"))
+	  (lazy-seq->list (kv-keys store start: (string->blob "baz"))))
+    (test "start before first key"
+	  `(,(string->blob "bar")
+	    ,(string->blob "baz")
+	    ,(string->blob "foo")
+	    ,(string->blob "qux"))
+	  (lazy-seq->list (kv-keys store start: (string->blob "aaa"))))
+    (test "end"
+	  `(,(string->blob "bar")
+	    ,(string->blob "baz"))
+	  (lazy-seq->list (kv-keys store end: (string->blob "baz"))))
+    (test "end past last key"
+	  `(,(string->blob "bar")
+	    ,(string->blob "baz")
+	    ,(string->blob "foo")
+	    ,(string->blob "qux"))
+	  (lazy-seq->list (kv-keys store end: (string->blob "zzz"))))
+    (test "start and end"
+	  `(,(string->blob "baz")
+	    ,(string->blob "foo"))
+	  (lazy-seq->list (kv-keys store
+				    start: (string->blob "baz")
+				    end: (string->blob "foo"))))))
+
+(test-group "kv-values"
+  (let ((store (make-test-store)))
+    (kv-put store (string->blob "foo") (string->blob "one"))
+    (kv-put store (string->blob "bar") (string->blob "two"))
+    (kv-put store (string->blob "baz") (string->blob "three"))
+    (kv-put store (string->blob "qux") (string->blob "four"))
+    (test "all"
+	  `(,(string->blob "two")
+	    ,(string->blob "three")
+	    ,(string->blob "one")
+	    ,(string->blob "four"))
+	  (lazy-seq->list (kv-values store)))
+    (test "start"
+	  `(,(string->blob "three")
+	    ,(string->blob "one")
+	    ,(string->blob "four"))
+	  (lazy-seq->list (kv-values store start: (string->blob "baz"))))
+    (test "start before first key"
+	  `(,(string->blob "two")
+	    ,(string->blob "three")
+	    ,(string->blob "one")
+	    ,(string->blob "four"))
+	  (lazy-seq->list (kv-values store start: (string->blob "aaa"))))
+    (test "end"
+	  `(,(string->blob "two")
+	    ,(string->blob "three"))
+	  (lazy-seq->list (kv-values store end: (string->blob "baz"))))
+    (test "end past last key"
+	  `(,(string->blob "two")
+	    ,(string->blob "three")
+	    ,(string->blob "one")
+	    ,(string->blob "four"))
+	  (lazy-seq->list (kv-values store end: (string->blob "zzz"))))
+    (test "start and end"
+	  `(,(string->blob "three")
+	    ,(string->blob "one"))
+	  (lazy-seq->list (kv-values store
+				    start: (string->blob "baz")
+				    end: (string->blob "foo"))))))
+
 (test-group "kv-pairs"
   (let ((store (make-test-store)))
     (kv-put store (string->blob "foo") (string->blob "one"))
@@ -84,27 +164,29 @@
 	  `((,(string->blob "baz") . ,(string->blob "three"))
 	    (,(string->blob "foo") . ,(string->blob "one"))
 	    (,(string->blob "qux") . ,(string->blob "four")))
-	  (lazy-seq->list (kv-pairs store (string->blob "baz"))))
+	  (lazy-seq->list (kv-pairs store start: (string->blob "baz"))))
     (test "start before first key"
 	  `((,(string->blob "bar") . ,(string->blob "two"))
 	    (,(string->blob "baz") . ,(string->blob "three"))
 	    (,(string->blob "foo") . ,(string->blob "one"))
 	    (,(string->blob "qux") . ,(string->blob "four")))
-	  (lazy-seq->list (kv-pairs store (string->blob "aaa"))))
+	  (lazy-seq->list (kv-pairs store start: (string->blob "aaa"))))
     (test "end"
 	  `((,(string->blob "bar") . ,(string->blob "two"))
 	    (,(string->blob "baz") . ,(string->blob "three")))
-	  (lazy-seq->list (kv-pairs store #f (string->blob "baz"))))
+	  (lazy-seq->list (kv-pairs store end: (string->blob "baz"))))
     (test "end past last key"
 	  `((,(string->blob "bar") . ,(string->blob "two"))
 	    (,(string->blob "baz") . ,(string->blob "three"))
 	    (,(string->blob "foo") . ,(string->blob "one"))
 	    (,(string->blob "qux") . ,(string->blob "four")))
-	  (lazy-seq->list (kv-pairs store #f (string->blob "zzz"))))
+	  (lazy-seq->list (kv-pairs store end: (string->blob "zzz"))))
     (test "start and end"
 	  `((,(string->blob "baz") . ,(string->blob "three"))
 	    (,(string->blob "foo") . ,(string->blob "one")))
-	  (lazy-seq->list (kv-pairs store (string->blob "baz") (string->blob "foo"))))))
+	  (lazy-seq->list (kv-pairs store
+				    start: (string->blob "baz")
+				    end: (string->blob "foo"))))))
 
 (test-group "get after delete"
   (let ((store (make-test-store)))

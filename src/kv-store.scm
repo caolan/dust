@@ -12,8 +12,12 @@
  kv-get
  kv-delete
  kv-pairs
+ kv-keys
+ kv-values
+ kv-env-rehash
  kv-env-sync
  kv-env-sync-accept
+ kv-env-sync-accept-handle-message
  )
 
 ;;;;; Dependencies ;;;;;
@@ -31,7 +35,7 @@
      dust.hash-store
      dust.u8vector-utils)
 
-(define-constant DBI_NAME "kv")
+(define-constant DBI_NAME "data")
 
 (define-record kv-store txn dbi hash-store)
 
@@ -58,12 +62,12 @@
 	   (kv-store-dbi store)
 	   key))
 
-(define (kv-put store key data)
+(define (kv-put store key data #!key (flags 0))
   (mdb-put (kv-store-txn store)
 	   (kv-store-dbi store)
 	   key
 	   data
-	   0)
+	   flags)
   (hash-put (kv-store-hash-store store)
 	    key
 	    (generic-hash data size: hash-size)))
@@ -74,7 +78,7 @@
 	   key)
   (hash-delete (kv-store-hash-store store) key))
 
-(define (kv-pairs store #!optional start end)
+(define (kv-pairs store #!key start end)
   (when (and start end)
     (assert (string<=? (blob->string start)
 		       (blob->string end))))
@@ -98,6 +102,12 @@
 			 (loop #f))))))
 	((exn lmdb MDB_NOTFOUND) lazy-null)))))
 
+(define kv-keys
+  (compose (cut lazy-map car <>) kv-pairs))
+
+(define kv-values
+  (compose (cut lazy-map cdr <>) kv-pairs))
+
 (define (kv-env-rehash env)
   (with-kv-store env 0 (compose rehash kv-store-hash-store)))
 
@@ -111,16 +121,19 @@
 ;; The default sync change handler will attmept to match the remote
 ;; store exactly, including deleting local keys which don't exist in
 ;; the remote store
-(define (default-change-handler store conn type key remote-hash)
-  (case type
-    ((missing)
-     (kv-delete store key))
-    ((new)
-     (let ((data (request-data conn key)))
-       (kv-put store key data)))
-    ((different)
-     (let ((data (request-data conn key)))
-       (kv-put store key data)))))
+(define (default-change-handler env conn type key remote-hash)
+  (with-kv-store
+   env 0
+   (lambda (store)
+     (case type
+       ((missing)
+	(kv-delete store key))
+       ((new)
+	(let ((data (request-data conn key)))
+	  (kv-put store key data)))
+       ((different)
+	(let ((data (request-data conn key)))
+	  (kv-put store key data)))))))
 
 ;; protocol versions supported by this implementation
 (define supported-versions #(1))
@@ -152,9 +165,7 @@
 	   (lazy-each
 	    (match-lambda
 		(#(type key remote-hash)
-		 (with-kv-store env 0
-		   (lambda (write-store)
-		     (change-handler write-store conn type key remote-hash)))))
+		 (change-handler env conn type key remote-hash)))
 	    (hash-diff (kv-store-hash-store read-store)
 		       conn
 		       lower-bound

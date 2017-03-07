@@ -2,5 +2,5 @@
  (author "Caolan McMahon")
  (category net)
  (license "GPL-3")
- (needs lmdb-lolevel lazy-seq sodium matchable srfi-117 bencode)
+ (needs lmdb-lolevel lazy-seq sodium matchable srfi-117 bencode endian-blob)
  (test-depends test test-generative data-generators unix-sockets))
