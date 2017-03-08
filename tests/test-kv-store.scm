@@ -442,8 +442,8 @@
 	       (set! store1-data-in-bounds
 		 (lazy-seq->list
 		  (kv-pairs write-store1
-			    (and start (u8vector->blob start))
-			    (and end (u8vector->blob end)))))
+			    start: (and start (u8vector->blob start))
+			    end: (and end (u8vector->blob end)))))
 	       (set! store1-data-after-end
 		 (and end
 		      (lazy-seq->list
@@ -522,12 +522,12 @@
 	       (test "data in bounds is now same in store1 and store2"
 		     (lazy-seq->list
 		      (kv-pairs write-store1
-				(and start (u8vector->blob start))
-				(and end (u8vector->blob end))))
+				start: (and start (u8vector->blob start))
+				end: (and end (u8vector->blob end))))
 		     (lazy-seq->list
 		      (kv-pairs write-store2
-				(and start (u8vector->blob start))
-				(and end (u8vector->blob end))))))))))))
+				start: (and start (u8vector->blob start))
+				end: (and end (u8vector->blob end))))))))))))
     ;; tidy up
     (mdb-env-close env1)
     (mdb-env-close env2)))
