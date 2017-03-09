@@ -20,9 +20,9 @@
 (define (with-connection in out thunk)
   (let ((conn (connection in out)))
     (handle-exceptions exn (begin
-			     (close-connection conn)
-			     (abort exn))
-		       (thunk conn))
+                             (close-connection conn)
+                             (abort exn))
+                       (thunk conn))
     (close-connection conn)))
 
 )

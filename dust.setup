@@ -4,23 +4,23 @@
 (change-directory "lib")
 
 (compile -O2 -d1 -inline -s "../src/u8vector-utils.scm" -J
-	 -o "dust.u8vector-utils.so")
+         -o "dust.u8vector-utils.so")
 (compile -O2 -d0 -s "dust.u8vector-utils.import.scm")
 
 (compile -O2 -d1 -inline -s "../src/connection.scm" -J
-	 -o "dust.connection.so")
+         -o "dust.connection.so")
 (compile -O2 -d0 -s "dust.connection.import.scm")
 
 (compile -O2 -d1 -inline -s "../src/hash-store.scm" -Iinclude -llmdb -J
-	 -o "dust.hash-store.so")
+         -o "dust.hash-store.so")
 (compile -O2 -d0 -s "dust.hash-store.import.scm")
 
 (compile -O2 -d1 -inline -s "../src/kv-store.scm" -Iinclude -llmdb -J
-	 -o "dust.kv-store.so")
+         -o "dust.kv-store.so")
 (compile -O2 -d0 -s "dust.kv-store.import.scm")
 
 (compile -O2 -d1 -inline -s "../src/event-store.scm" -Iinclude -llmdb -J
-	 -o "dust.event-store.so")
+         -o "dust.event-store.so")
 (compile -O2 -d0 -s "dust.event-store.import.scm")
 
 (install-extension
