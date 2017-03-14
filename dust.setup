@@ -1,5 +1,7 @@
 (use posix)
 
+(define VERSION "1.0.0")
+
 (create-directory/parents "lib")
 (change-directory "lib")
 
@@ -11,21 +13,36 @@
          -o "dust.connection.so")
 (compile -O2 -d0 -s "dust.connection.import.scm")
 
-(compile -O2 -d1 -inline -s "../src/hash-store.scm" -Iinclude -llmdb -J
+(compile -O2 -d1 -inline -s "../src/hash-store.scm" -Iinclude -J
          -o "dust.hash-store.so")
 (compile -O2 -d0 -s "dust.hash-store.import.scm")
 
-(compile -O2 -d1 -inline -s "../src/kv-store.scm" -Iinclude -llmdb -J
+(compile -O2 -d1 -inline -s "../src/kv-store.scm" -Iinclude -J
          -o "dust.kv-store.so")
 (compile -O2 -d0 -s "dust.kv-store.import.scm")
 
-(compile -O2 -d1 -inline -s "../src/event-store.scm" -Iinclude -llmdb -J
+(compile -O2 -d1 -inline -s "../src/event-store.scm" -Iinclude -J
          -o "dust.event-store.so")
 (compile -O2 -d0 -s "dust.event-store.import.scm")
 
+(compile -O2 -d1 -inline -s "../src/server.scm" -Iinclude -J
+         -o "dust.server.so")
+(compile -O2 -d0 -s "dust.server.import.scm")
+
+(compile -O2 -d1 -inline -s "../src/client.scm" -Iinclude -J
+         -o "dust.client.so")
+(compile -O2 -d0 -s "dust.client.import.scm")
+
+(compile -O2 -d1 -inline "../src/dustd.scm" -o "dustd")
+(compile -O2 -d1 -inline "../src/dust.scm" -o "dust")
+
 (install-extension
-  'lmdb-merkle
-  '("dust.hash-store.so"
+  'dust
+  '("dust.server.so"
+    "dust.server.import.so"
+    "dust.client.so"
+    "dust.client.import.so"
+    "dust.hash-store.so"
     "dust.hash-store.import.so"
     "dust.kv-store.so"
     "dust.kv-store.import.so"
@@ -35,4 +52,14 @@
     "dust.connection.import.so"
     "dust.u8vector-utils.so"
     "dust.u8vector-utils.import.so")
-  '((version "1.0.0")))
+  `((version ,VERSION)))
+
+(install-program
+  'dustd
+  '("dustd")
+  `((version , VERSION)))
+  
+(install-program
+  'dust
+  '("dust")
+  `((version , VERSION)))

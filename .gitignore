@@ -5,3 +5,5 @@
 /tests/testdb2
 /lib/*.so
 /lib/*.scm
+/lib/dust
+/lib/dustd
