@@ -2,7 +2,8 @@
  (author "Caolan McMahon")
  (category net)
  (license "GPL-3")
- (needs lmdb-lolevel
+ (needs make
+        lmdb-lolevel
         lazy-seq
         (sodium 0.3.0)
         matchable
