@@ -1,6 +1,7 @@
 (module dust.client
 
 (connect
+ command
  ping)
 
 (import chicken scheme foreign)
@@ -18,6 +19,10 @@
 
 (define (ping conn)
   (write-bencode '((method . "ping")) (connection-out conn))
+  (receive-bencode conn))
+
+(define (command conn method)
+  (write-bencode `((method . ,method)) (connection-out conn))
   (receive-bencode conn))
 
 )

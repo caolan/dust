@@ -14,7 +14,11 @@
      dust.connection
      dust.event-store)
 
-(define (ping) "pong")
+(define (ping)
+  "pong")
+
+(define (create)
+  "TODO")
 
 (define-syntax make-dispatcher
   (syntax-rules ()
@@ -25,10 +29,15 @@
        (hash-table-set! ht (symbol->string (quote name)) name)
        ...
        (lambda (data)
-         ((hash-table-ref ht (alist-ref 'method data))))))))
+         (let ((f (hash-table-ref/default ht (alist-ref 'method data) #f)))
+           (if f
+               `((data . ,(f)))
+               `((error . "Unknown method")))))))))
 
 (define dispatch-rpc
-  (make-dispatcher ping))
+  (make-dispatcher
+   ping
+   create))
 
 (define (handle-request conn)
   (write-bencode (dispatch-rpc (receive-bencode conn))
