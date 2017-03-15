@@ -37,15 +37,15 @@
         (compile -O2 -d1 -inline -s "../src/client.scm" -J
                  -o "dust.client.so")
         (compile -O2 -d0 -s "dust.client.import.scm")))
-  '("dust"
-    "dustd"
-    "dust.u8vector-utils.so"
+  '("dust.u8vector-utils.so"
     "dust.connection.so"
     "dust.hash-store.so"
     "dust.kv-store.so"
     "dust.event-store.so"
     "dust.server.so"
-    "dust.client.so"))
+    "dust.client.so"
+    "dustd"
+    "dust"))
 
 (install-extension
   'dust
