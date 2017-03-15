@@ -11,6 +11,18 @@ A daemon for disseminating events over a peer-to-peer network.
   sudo apt-get install chicken-bin libsodium-dev liblmdb-dev
 #+END_SRC
 
+Currently (until https://bugs.call-cc.org/ticket/1352 is resolved), a patched version of the unix-sockets egg is required. Please fetch the source for this egg by doing:
+
+#+BEGIN_SRC shell
+  chicken-install -r unix-sockets
+#+END_SRC
+
+Then apply the patch from the ticket and, in the unix-sockets directly, do:
+
+#+BEGIN_SRC shell
+  chicken-install -s
+#+END_SRC
+
 *** Build and install
 #+BEGIN_SRC shell
   chicken-install -s
@@ -20,7 +32,7 @@ A daemon for disseminating events over a peer-to-peer network.
 Install test dependencies.
 
 #+BEGIN_SRC shell
-  chicken-install -s test test-generative data-generators unix-sockets
+  chicken-install -s test test-generative data-generators
 #+END_SRC
 
 Run the unit tests.
