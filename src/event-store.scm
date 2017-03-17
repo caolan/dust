@@ -16,7 +16,8 @@
  event-store-env-sync
  event-store-env-sync-accept
  event-time->blob
- blob->event-time)
+ blob->event-time
+ format-event-time-blob)
 
 ;;;;; Dependencies ;;;;;
 
@@ -84,6 +85,14 @@
      (u8vector->counter data)
      (u8vector-drop data 4))))
 
+;; returns a more human-friendly string representation of an event
+;; time blob
+(define (format-event-time-blob b)
+  (receive (counter id) (blob->event-time b)
+    (string-append (number->string counter)
+                   "-"
+                   (bin->hex (u8vector->blob/shared id)))))
+
 (define (set-clock store t)
   (mdb-put (event-store-txn store)
            (event-store-meta-dbi store)
@@ -115,12 +124,13 @@
                          (mdb-txn-commit txn)))))
 
 (define (event-put store data)
-  (kv-put (event-store-kv-store store)
-          (event-time->blob
-           (event-store-clock store)
-           (event-store-id store))
-          data)
-  (tick store))
+  ;; TODO: test return value of event-put
+  (let ((key (event-time->blob
+              (event-store-clock store)
+              (event-store-id store))))
+    (kv-put (event-store-kv-store store) key data)
+    (tick store)
+    key))
 
 (define (event-get store timestamp)
   (kv-get (event-store-kv-store store) timestamp))

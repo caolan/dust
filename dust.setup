@@ -17,6 +17,10 @@
         (compile -O2 -d1 -inline -s "../src/connection.scm" -J
                  -o "dust.connection.so")
         (compile -O2 -d0 -s "dust.connection.import.scm"))
+       ("dust.environment.so" ("../src/environment.scm")
+        (compile -O2 -d1 -inline -s "../src/environment.scm" -J
+                 -o "dust.environment.so")
+        (compile -O2 -d0 -s "dust.environment.import.scm"))
        ("dust.hash-store.so" ("../src/hash-store.scm")
         (compile -O2 -d1 -inline -s "../src/hash-store.scm" -J
                  -o "dust.hash-store.so")
@@ -39,6 +43,7 @@
         (compile -O2 -d0 -s "dust.client.import.scm")))
   '("dust.u8vector-utils.so"
     "dust.connection.so"
+    "dust.environment.so"
     "dust.hash-store.so"
     "dust.kv-store.so"
     "dust.event-store.so"
@@ -61,6 +66,8 @@
     "dust.event-store.import.so"
     "dust.connection.so"
     "dust.connection.import.so"
+    "dust.environment.so"
+    "dust.environment.import.so"
     "dust.u8vector-utils.so"
     "dust.u8vector-utils.import.so")
   `((version ,VERSION)))
