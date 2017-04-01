@@ -333,18 +333,24 @@
                   (node-key node)
                   (node-leaf node)))))
 
-;; Keep reading nodes from the cursor and moving onto the next dupsort
-;; item until the end of the dupsort data is reached
-(define (remaining-children cursor parent #!optional (first #t))
+
+;; returns false if next value not found
+(define (cursor-iter-dup cursor parent first)
   (condition-case
       (begin
         (unless first
           (mdb-cursor-get cursor #f #f MDB_NEXT_DUP))
-        (lazy-seq
-         (cons (blob->node parent (mdb-cursor-data cursor))
-               (remaining-children cursor parent #f))))
-    ;; stop when end of duplicates is hit
-    ((exn lmdb MDB_NOTFOUND) lazy-null)))
+        (mdb-cursor-data cursor))
+    ((exn lmdb MDB_NOTFOUND) #f)))
+  
+;; Keep reading nodes from the cursor and moving onto the next dupsort
+;; item until the end of the dupsort data is reached
+(define (remaining-children cursor parent #!optional (first #t))
+  (or (and-let* ((data (cursor-iter-dup cursor parent first)))
+        (lazy-seq (cons (blob->node parent data)
+                        (remaining-children cursor parent #f))))
+      ;; stop when end of duplicates is hit
+      lazy-null))
 
 ;; Returns children which fall inside parent's upper/lower bounds, or
 ;; which may have their own children which fall inside parent's
