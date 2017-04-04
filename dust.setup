@@ -45,6 +45,10 @@
         (compile -O2 -d1 -inline -s "../src/kademlia.scm" -J
                  -o "dust.kademlia.so")
         (compile -O2 -d0 -s "dust.kademlia.import.scm"))
+       ("dust.miniupnpc.so" ("../src/miniupnpc.scm")
+        (compile -O2 -d1 -inline -s "../src/miniupnpc.scm" -lminiupnpc -J
+                 -o "dust.miniupnpc.so")
+        (compile -O2 -d0 -s "dust.miniupnpc.import.scm"))
        ("dust.server.so" ("../src/server.scm")
         (compile -O2 -d1 -inline -s "../src/server.scm" -J
                  -o "dust.server.so")
@@ -62,6 +66,7 @@
     "dust.kv-store.so"
     "dust.event-store.so"
     "dust.kademlia.so"
+    "dust.miniupnpc.so"
     "dust.server.so"
     "dust.client.so"
     "dustd"
@@ -90,7 +95,9 @@
     "dust.lmdb-utils.so"
     "dust.lmdb-utils.import.so"
     "dust.kademlia.so"
-    "dust.kademlia.import.so")
+    "dust.kademlia.import.so"
+    "dust.miniupnpc.so"
+    "dust.miniupnpc.import.so")
   `((version ,VERSION)))
 
 (change-directory "../bin")

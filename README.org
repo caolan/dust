@@ -6,9 +6,10 @@ A daemon for disseminating events over a peer-to-peer network.
 - [[https://code.call-cc.org/][CHICKEN Scheme 4.x]]
 - [[https://libsodium.org][libsodium]]
 - [[https://symas.com/offerings/lightning-memory-mapped-database/][LMDB]]
+- [[http://miniupnp.free.fr/][miniupnpc]]
 
 #+BEGIN_SRC shell
-  sudo apt-get install chicken-bin libsodium-dev liblmdb-dev
+  sudo apt-get install chicken-bin libsodium-dev liblmdb-dev libminiupnpc-dev
 #+END_SRC
 
 Currently (until https://bugs.call-cc.org/ticket/1352 is resolved), a patched version of the unix-sockets egg is required. Please fetch the source for this egg by doing:
