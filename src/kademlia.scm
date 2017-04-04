@@ -314,10 +314,8 @@
     (mdb-del txn dbi child-1-key)))
 
 (define (k-bucket-size store prefix)
-  (let ((cursor (mdb-cursor-open
-                 (kademlia-store-txn store)
-                 (kademlia-store-routing-table store))))
-    (mdb-cursor-get cursor (prefix->blob prefix) #f MDB_SET_KEY)
-    (mdb-cursor-count cursor)))
+  (dup-count (kademlia-store-txn store)
+             (kademlia-store-routing-table store)
+             (prefix->blob prefix)))
 
 )

@@ -2,7 +2,8 @@
 
 ;;;;; Exports ;;;;;
 (with-transaction
- dup-values)
+ dup-values
+ dup-count)
 
 (import chicken scheme)
 (use lmdb-lolevel lazy-seq)
@@ -35,4 +36,10 @@
           (lazy-seq (cons data (loop cursor #f))))
         lazy-null)))
 
+(define (dup-count txn dbi key)
+  (let ((cursor (mdb-cursor-open txn dbi)))
+    (mdb-cursor-get cursor key #f MDB_SET_KEY)
+    (mdb-cursor-count cursor)))
+
 )
+
