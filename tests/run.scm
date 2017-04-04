@@ -1,6 +1,17 @@
-(use test)
+(use test posix files srfi-1 srfi-13)
 
-(load "tests/test-hash-store.scm")
-(load "tests/test-kv-store.scm")
+(define test-dir "tests")
+
+(define (test-file? filename)
+  (and (string-prefix? "test-" filename)
+       (string=? "scm" (pathname-extension filename))))
+        
+(define (run-test-file filename)
+  (print filename)
+  (print (make-string (string-length filename) #\=))
+  (load (make-pathname test-dir filename)))
+
+(for-each run-test-file
+          (filter test-file? (directory test-dir)))
 
 (test-exit)

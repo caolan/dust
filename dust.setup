@@ -13,6 +13,14 @@
         (compile -O2 -d1 -inline -s "../src/u8vector-utils.scm" -J
                  -o "dust.u8vector-utils.so")
         (compile -O2 -d0 -s "dust.u8vector-utils.import.scm"))
+       ("dust.bitstring-utils.so" ("../src/bitstring-utils.scm")
+        (compile -O2 -d1 -inline -s "../src/bitstring-utils.scm" -J
+                 -o "dust.bitstring-utils.so")
+        (compile -O2 -d0 -s "dust.bitstring-utils.import.scm"))
+       ("dust.lmdb-utils.so" ("../src/lmdb-utils.scm")
+        (compile -O2 -d1 -inline -s "../src/lmdb-utils.scm" -J
+                 -o "dust.lmdb-utils.so")
+        (compile -O2 -d0 -s "dust.lmdb-utils.import.scm"))
        ("dust.connection.so" ("../src/connection.scm")
         (compile -O2 -d1 -inline -s "../src/connection.scm" -J
                  -o "dust.connection.so")
@@ -33,6 +41,10 @@
         (compile -O2 -d1 -inline -s "../src/event-store.scm" -J
                  -o "dust.event-store.so")
         (compile -O2 -d0 -s "dust.event-store.import.scm"))
+       ("dust.kademlia.so" ("../src/kademlia.scm")
+        (compile -O2 -d1 -inline -s "../src/kademlia.scm" -J
+                 -o "dust.kademlia.so")
+        (compile -O2 -d0 -s "dust.kademlia.import.scm"))
        ("dust.server.so" ("../src/server.scm")
         (compile -O2 -d1 -inline -s "../src/server.scm" -J
                  -o "dust.server.so")
@@ -42,11 +54,14 @@
                  -o "dust.client.so")
         (compile -O2 -d0 -s "dust.client.import.scm")))
   '("dust.u8vector-utils.so"
+    "dust.bitstring-utils.so"
+    "dust.lmdb-utils.so"
     "dust.connection.so"
     "dust.environment.so"
     "dust.hash-store.so"
     "dust.kv-store.so"
     "dust.event-store.so"
+    "dust.kademlia.so"
     "dust.server.so"
     "dust.client.so"
     "dustd"
@@ -69,7 +84,13 @@
     "dust.environment.so"
     "dust.environment.import.so"
     "dust.u8vector-utils.so"
-    "dust.u8vector-utils.import.so")
+    "dust.u8vector-utils.import.so"
+    "dust.bitstring-utils.so"
+    "dust.bitstring-utils.import.so"
+    "dust.lmdb-utils.so"
+    "dust.lmdb-utils.import.so"
+    "dust.kademlia.so"
+    "dust.kademlia.import.so")
   `((version ,VERSION)))
 
 (change-directory "../bin")

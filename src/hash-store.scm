@@ -335,7 +335,7 @@
 
 
 ;; returns false if next value not found
-(define (cursor-iter-dup cursor parent first)
+(define (remaining-iter-dup cursor parent first)
   (condition-case
       (begin
         (unless first
@@ -346,7 +346,7 @@
 ;; Keep reading nodes from the cursor and moving onto the next dupsort
 ;; item until the end of the dupsort data is reached
 (define (remaining-children cursor parent #!optional (first #t))
-  (or (and-let* ((data (cursor-iter-dup cursor parent first)))
+  (or (and-let* ((data (remaining-iter-dup cursor parent first)))
         (lazy-seq (cons (blob->node parent data)
                         (remaining-children cursor parent #f))))
       ;; stop when end of duplicates is hit
