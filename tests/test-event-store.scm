@@ -9,7 +9,6 @@
      dust.kv-store
      dust.hash-store)
 
-
 (define (open-test-env path)
   (let ((env (mdb-env-create)))
     (mdb-env-set-mapsize env 10000000)
@@ -236,3 +235,4 @@
                   data
                   (lazy-seq->list (event-pairs read-store2))))))))))
 
+(test-exit)

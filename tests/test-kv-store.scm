@@ -653,3 +653,5 @@
           (test "data is same after sync"
                 (lazy-seq->list (kv-pairs write-store1))
                 (lazy-seq->list (kv-pairs write-store2)))))))))
+
+(test-exit)

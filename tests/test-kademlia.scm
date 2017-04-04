@@ -331,3 +331,5 @@
                test-id
                (local-id store)))))
     (mdb-env-close env)))
+
+(test-exit)

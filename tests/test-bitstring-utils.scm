@@ -63,3 +63,5 @@
                               (list->bitstring '(1 1 0))))
   (test -1 (bitstring-compare (list->bitstring '(0 1 0 1))
                               (list->bitstring '(1 1 0)))))
+
+(test-exit)

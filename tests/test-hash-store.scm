@@ -13,7 +13,6 @@
      test-generative
      data-generators)
 
-
 (define (clear-testdb #!optional (path "tests/testdb"))
   (when (file-exists? path)
     (delete-directory path #t))
@@ -79,7 +78,7 @@
          (cursor (mdb-cursor-open (hash-store-txn store) dbi)))
     (keys cursor)))
 
-(define (dup-count store)
+(define (total-dup-count store)
   (let ((count 0))
     (condition-case
         (begin
@@ -442,7 +441,7 @@
      (string->blob "foo")
      (generic-hash (string->blob "one") size: hash-size))
     (test '(("foo" . ())) (tree->list store root-node))
-    (test 1 (dup-count store))
+    (test 1 (total-dup-count store))
     (test '() (dirty-keys store))))
 
 (test-group "insert - split single root-level node"
@@ -454,7 +453,7 @@
     (test '(("test" . (("ers" . ())
                        ("ing" . ()))))
           (tree->list store root-node))
-    (test 3 (dup-count store))
+    (test 3 (total-dup-count store))
     (test '("test") (dirty-keys store))
     (mdb-txn-commit (hash-store-txn store))))
 
@@ -470,7 +469,7 @@
                      ("st" . (("ers" . ())
                               ("ing" . ()))))))
           (tree->list store root-node))
-    (test 5 (dup-count store))
+    (test 5 (total-dup-count store))
     (test '("te") (dirty-keys store))
     (mdb-txn-commit (hash-store-txn store))))
 
@@ -487,7 +486,7 @@
                                ("rs" . ())))
                        ("ing" . ()))))
           (tree->list store root-node))
-    (test 5 (dup-count store))
+    (test 5 (total-dup-count store))
     (test '("teste") (dirty-keys store))
     (hash-put
      store
@@ -498,7 +497,7 @@
                        ("ing" . ())
                        ("s" . ()))))
           (tree->list store root-node))
-    (test 6 (dup-count store))
+    (test 6 (total-dup-count store))
     (test '("teste" "test") (dirty-keys store))
     (mdb-txn-commit (hash-store-txn store))))
 
@@ -515,7 +514,7 @@
                          ("ing" . ()))))
             (tree->list store root-node))
       (test hash2 (hash-get store (string->blob "testers")))
-      (test 3 (dup-count store))
+      (test 3 (total-dup-count store))
       (test '("test") (dirty-keys store))
       (mdb-txn-commit (hash-store-txn store)))))
 
@@ -529,7 +528,7 @@
           (tree->list store root-node))
     (test hash2 (hash-get store (string->blob "tests")))
     (test hash (hash-get store (string->blob "test")))
-    (test 3 (dup-count store))
+    (test 3 (total-dup-count store))
     (test '("test") (dirty-keys store))))
 
 (test-group "del - delete only root node"
@@ -537,7 +536,7 @@
         (store (make-test-store '(("test" . ())))))
       (hash-delete store (string->blob "test"))
       (test '() (tree->list store root-node))
-      (test 0 (dup-count store))
+      (test 0 (total-dup-count store))
       (test '() (dirty-keys store))
       (mdb-txn-commit (hash-store-txn store))))
 
@@ -550,7 +549,7 @@
       (test '(("test" . (("ing" . ())
                          ("s" . ()))))
             (tree->list store root-node))
-      (test 3 (dup-count store))
+      (test 3 (total-dup-count store))
       (test '("test") (dirty-keys store))
       (mdb-txn-commit (hash-store-txn store))))
 
@@ -561,7 +560,7 @@
       (hash-delete store (string->blob "testers"))
       (test '(("testing" . ()))
             (tree->list store root-node))
-      (test 1 (dup-count store))
+      (test 1 (total-dup-count store))
       (test '() (dirty-keys store))
       (mdb-txn-commit (hash-store-txn store))))
 
@@ -576,18 +575,18 @@
                                  ("rs" . ())))
                          ("ings" . ()))))
             (tree->list store root-node))
-      (test 5 (dup-count store))
+      (test 5 (total-dup-count store))
       (test '("test") (dirty-keys store))
       (hash-delete store (string->blob "testings"))
       (test '(("teste" . (("d" . ())
                           ("rs" . ()))))
             (tree->list store root-node))
-      (test 3 (dup-count store))
+      (test 3 (total-dup-count store))
       (test '() (dirty-keys store))
       (hash-delete store (string->blob "testers"))
       (test '(("tested" . ()))
             (tree->list store root-node))
-      (test 1 (dup-count store))
+      (test 1 (total-dup-count store))
       (test '() (dirty-keys store))
       (mdb-txn-commit (hash-store-txn store))))
 
@@ -598,7 +597,7 @@
       (hash-delete store (string->blob "foo"))
       (test '(("bar" . ()))
             (tree->list store root-node))
-      (test 1 (dup-count store))
+      (test 1 (total-dup-count store))
       (test '() (dirty-keys store))))
 
 (test-group "del - delete nested key with empty sibiling"
@@ -612,7 +611,7 @@
     (hash-delete store (string->blob "foobar"))
     (test '(("foo" . ()))
           (tree->list store root-node))
-    (test 1 (dup-count store))
+    (test 1 (total-dup-count store))
     (test '() (dirty-keys store))))
 
 (test-group "inserting then deleting keys results in empty tree"
@@ -628,7 +627,7 @@
                 (hash-delete store (car pair)))
               pairs)
     (test '() (tree->list store root-node))
-    (test 0 (dup-count store))
+    (test 0 (total-dup-count store))
     (test '() (dirty-keys store))))
 
 (test-group "inserted hashes can be retrieved with hash-get"
@@ -2603,3 +2602,5 @@
          (mdb-txn-commit (hash-store-txn store2))
          (mdb-env-close (mdb-txn-env (hash-store-txn store1)))
          (mdb-env-close (mdb-txn-env (hash-store-txn store2))))))))
+
+(test-exit)

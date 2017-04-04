@@ -11,7 +11,9 @@
   (print (make-string (string-length filename) #\=))
   (load (make-pathname test-dir filename)))
 
-(for-each run-test-file
-          (filter test-file? (directory test-dir)))
+;; disable test-exit until all tests have run
+(fluid-let ((test-exit void))
+  (for-each run-test-file
+            (filter test-file? (directory test-dir))))
 
 (test-exit)
