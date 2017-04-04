@@ -12,4 +12,6 @@
         endian-blob
         pathname-expand
         unix-sockets)
- (test-depends test test-generative data-generators))
+ (test-depends (test 0.9.9.10)
+               test-generative
+               data-generators))

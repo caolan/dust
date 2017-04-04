@@ -41,9 +41,3 @@ Run the unit tests.
 #+BEGIN_SRC shell
   csi -s tests/run.scm
 #+END_SRC
-
-_NOTE_: At the time of writing there is an issue with the test egg,
-which causes errors outside of tests to fail to be reported in the
-test suite exit code. I'm using a patched version until this issue is
-resolved, see https://bugs.call-cc.org/ticket/1358#comment:1 for
-status and patch.
