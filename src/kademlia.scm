@@ -71,6 +71,7 @@
            (kademlia-store-metadata x)))
 
 (define (node->blob node)
+  (assert (= 20 (blob-size (node-id node))))
   (bitstring->blob
    (bitconstruct
     ((node-first-seen node) 64 host signed)
