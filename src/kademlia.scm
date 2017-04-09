@@ -3,12 +3,25 @@
 ;;;;; Exports ;;;;;
 (make-node
  node-ip
+ node-ip-set!
  node-port
+ node-port-set!
  node-id
+ node-id-set!
+ node-first-seen
+ node-first-seen-set!
+ node-last-seen
+ node-last-seen-set!
+ node-failed-requests
+ node-failed-requests-set!
+ update-node
  node->blob
  blob->node
  kademlia-env-open
  kademlia-store-open
+ kademlia-store-txn
+ kademlia-store-routing-table
+ kademlia-store-metadata
  routing-table-open
  metadata-open
  local-id
@@ -17,14 +30,17 @@
  prefix->blob
  blob->prefix
  prefix-blob-compare
- node-blob-compare-first-seen
- k-bucket-nodes
- k-bucket-insert
- k-bucket-remove
- k-bucket-destroy
- k-bucket-split
- k-bucket-join
- k-bucket-size)
+ node-blob-compare
+ max-bucket-size
+ bucket-nodes
+ bucket-insert
+ bucket-remove
+ bucket-destroy
+ bucket-split
+ bucket-join
+ bucket-size
+ find-bucket-for-id
+ update-routing-table)
 
 (import chicken scheme foreign)
 
@@ -33,16 +49,20 @@
      srfi-4
      data-structures
      sodium
-     bitstring
      posix
+     bitstring
+     defstruct
      dust.bitstring-utils
+     dust.lazy-seq-utils
      dust.lmdb-utils)
 
 (foreign-declare "#include <lmdb.h>")
 (foreign-declare "#include <string.h>")
 (foreign-declare "#include <stdint.h>")
 
-(define-record node
+(define max-bucket-size (make-parameter 20))
+
+(defstruct node
   id
   ip
   port
@@ -74,27 +94,27 @@
   (assert (= 20 (blob-size (node-id node))))
   (bitstring->blob
    (bitconstruct
+    ((node-id node) 160 bitstring)
     ((node-first-seen node) 64 host signed)
     ((node-last-seen node) 64 host signed)
     ((node-failed-requests node) 8 host unsigned)
-    ((node-id node) 160 bitstring)
     ((node-port node) 16 host unsigned)
     ((string->bitstring (node-ip node)) bitstring))))
 
 (define (blob->node blob)
   (bitmatch blob
-    (((first-seen-secs 64 host signed)
+    (((id 160 bitstring)
+      (first-seen-secs 64 host signed)
       (last-seen-secs 64 host signed)
       (failed-requests 8 host unsigned)
-      (id 160 bitstring)
       (port 16 host unsigned)
       (ip bitstring))
-     (make-node (bitstring->blob id)
-                (bitstring->string ip)
-                port
-                first-seen-secs
-                last-seen-secs
-                failed-requests))))
+     (make-node id: (bitstring->blob id)
+                ip: (bitstring->string ip)
+                port: port
+                first-seen: first-seen-secs
+                last-seen: last-seen-secs
+                failed-requests: failed-requests))))
 
 (define (kademlia-env-open path)
   (let ((env (mdb-env-create)))
@@ -204,12 +224,10 @@
 ;; sorts nodes stored in a dupsort db by first-seen timestamp field
 (foreign-declare
  "int kademlia_node_cmp(const MDB_val *a, const MDB_val *b) {
-    int64_t* a_first = a->mv_data;
-    int64_t* b_first = b->mv_data;
-    return (*a_first) - (*b_first);
+    return memcmp(a->mv_data, b->mv_data, 20);
   }")
 
-(define node-blob-compare-first-seen
+(define node-blob-compare
   (foreign-lambda* int
    ((scheme-object a)
     (scheme-object b))
@@ -258,48 +276,48 @@
        (local-id-set! store new-id)
        new-id))))
 
-(define (k-bucket-nodes store prefix)
-  ;; (printf "k-bucket-nodes: ~S ~S ~S~n" txn dbi prefix)
+(define (bucket-nodes store prefix)
+  ;; (printf "bucket-nodes: ~S ~S ~S~n" txn dbi prefix)
   (lazy-map blob->node (dup-values (kademlia-store-txn store)
                                    (kademlia-store-routing-table store)
                                    (prefix->blob prefix))))
 
-(define (k-bucket-insert store prefix node)
-  ;; (printf "k-bucket-insert: ~S ~S ~S ~S~n" txn dbi prefix node)
+(define (bucket-insert store prefix node)
+  ;; (printf "bucket-insert: ~S ~S ~S ~S~n" txn dbi prefix node)
   (mdb-put (kademlia-store-txn store)
            (kademlia-store-routing-table store)
            (prefix->blob prefix)
            (node->blob node)
            0))
 
-(define (k-bucket-remove store prefix node)
-  ;; (printf "k-bucket-remove: ~S ~S ~S ~S~n" txn dbi prefix node)
+(define (bucket-remove store prefix node)
+  ;; (printf "bucket-remove: ~S ~S ~S ~S~n" txn dbi prefix node)
   (mdb-del (kademlia-store-txn store)
            (kademlia-store-routing-table store)
            (prefix->blob prefix)
            (node->blob node)))
 
-(define (k-bucket-destroy store prefix)
-  ;; (printf "k-bucket-destroy: ~S ~S ~S~n" txn dbi prefix)
+(define (bucket-destroy store prefix)
+  ;; (printf "bucket-destroy: ~S ~S ~S~n" txn dbi prefix)
   (mdb-del (kademlia-store-txn store)
            (kademlia-store-routing-table store)
            (prefix->blob prefix)))
 
-(define (k-bucket-split store prefix)
-  ;; (printf "k-bucket-split: ~S ~S ~S~n" txn dbi prefix)
+(define (bucket-split store prefix)
+  ;; (printf "bucket-split: ~S ~S ~S~n" txn dbi prefix)
   (let ((upper (bitstring-append prefix (list->bitstring '(1))))
         (lower (bitstring-append prefix (list->bitstring '(0)))))
     (lazy-each (lambda (node)
                  (if (bitstring-bit-set?
                       (blob->bitstring (node-id node))
                       (bitstring-length prefix))
-                     (k-bucket-insert store upper node)
-                     (k-bucket-insert store lower node)))
-               (k-bucket-nodes store prefix))
-    (k-bucket-destroy store prefix)))
+                     (bucket-insert store upper node)
+                     (bucket-insert store lower node)))
+               (bucket-nodes store prefix))
+    (bucket-destroy store prefix)))
 
-(define (k-bucket-join store parent)
-  ;; (printf "k-bucket-join: ~S ~S ~S~n" txn dbi parent)
+(define (bucket-join store parent)
+  ;; (printf "bucket-join: ~S ~S ~S~n" txn dbi parent)
   (let* ((child-0 (bitstring-append parent (list->bitstring '(0))))
          (child-1 (bitstring-append parent (list->bitstring '(1))))
          (parent-key (prefix->blob parent))
@@ -314,9 +332,70 @@
     (mdb-del txn dbi child-0-key)
     (mdb-del txn dbi child-1-key)))
 
-(define (k-bucket-size store prefix)
+(define (bucket-size store prefix)
   (dup-count (kademlia-store-txn store)
              (kademlia-store-routing-table store)
              (prefix->blob prefix)))
+
+(define (bucket-find store prefix id)
+  (lazy-find
+   (lambda (node)
+     (blob=? (node-id node) id))
+   (bucket-nodes store prefix)))
+
+(define (find-bucket-for-id store id)
+  (let ((id (blob->bitstring id)))
+    (with-cursor
+     (kademlia-store-txn store)
+     (kademlia-store-routing-table store)
+     (lambda (cursor)
+       (let ((key (and (mdb-cursor-get/default
+                        cursor (prefix->blob id) #f MDB_SET_RANGE #f)
+                       (blob->prefix (mdb-cursor-key cursor)))))
+         (cond
+          ((not key)
+           ;; reached end of keys, check if last key is prefix
+           (and-let* ((last-key
+                       (and (mdb-cursor-get/default cursor #f #f MDB_LAST #f)
+                            (blob->prefix (mdb-cursor-key cursor)))))
+             (and (bitstring-prefix? last-key id)
+                  last-key)))
+          ((bitstring-prefix? key id)
+           ;; found a prefix
+           key)
+          (else
+           ;; check if previous key is prefix
+           (and-let* ((prev-key
+                       (and (mdb-cursor-get/default cursor #f #f MDB_PREV #f)
+                            (blob->prefix (mdb-cursor-key cursor)))))
+             (and (bitstring-prefix? prev-key id)
+                  prev-key)))))))))
+
+(define (update-routing-table store id ip port)
+  ;; (printf "update-routing-table: ~S ~S ~S ~S~n" store id ip port)
+  (let ((prefix (find-bucket-for-id store id)))
+    ;; (printf "prefix: ~S~n" prefix)
+    (if prefix
+        (let ((existing (bucket-find store prefix id)))
+          ;; (printf "existing: ~S~n" existing)
+          (bucket-insert store
+                         prefix
+                         (if existing
+                             (update-node existing
+                                          last-seen: (current-seconds))
+                             (make-node id: id
+                                        ip: ip
+                                        port: port
+                                        first-seen: (current-seconds)
+                                        last-seen: (current-seconds)
+                                        failed-requests: 0))))
+        (bucket-insert store
+                       (bitstring-take id 1)
+                       (make-node id: id
+                                  ip: ip
+                                  port: port
+                                  first-seen: (current-seconds)
+                                  last-seen: (current-seconds)
+                                  failed-requests: 0)))))
 
 )

@@ -32,4 +32,8 @@
      ((bitstring-bit-set? a i) 1)
      (else -1))))
 
+;; return #t if a is a prefix of b, #f otherwise
+(define (bitstring-prefix? a b)
+  (bitstring=? a (bitstring-take b (bitstring-length a))))
+  
 )
