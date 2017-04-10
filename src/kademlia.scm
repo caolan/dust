@@ -372,30 +372,40 @@
                   prev-key)))))))))
 
 (define (update-routing-table store id ip port)
-  ;; (printf "update-routing-table: ~S ~S ~S ~S~n" store id ip port)
   (let ((prefix (find-bucket-for-id store id)))
-    ;; (printf "prefix: ~S~n" prefix)
-    (if prefix
-        (let ((existing (bucket-find store prefix id)))
-          ;; (printf "existing: ~S~n" existing)
-          (bucket-insert store
-                         prefix
-                         (if existing
-                             (update-node existing
-                                          last-seen: (current-seconds))
-                             (make-node id: id
-                                        ip: ip
-                                        port: port
-                                        first-seen: (current-seconds)
-                                        last-seen: (current-seconds)
-                                        failed-requests: 0))))
+    (cond
+     ;; if no bucket found, insert node into new bucket
+     ((not prefix)
+      (bucket-insert store
+                     (bitstring-take id 1)
+                     (make-node id: id
+                                ip: ip
+                                port: port
+                                first-seen: (current-seconds)
+                                last-seen: (current-seconds)
+                                failed-requests: 0)))
+     ;; if node already exists, update last-seen
+     ((bucket-find store prefix id) =>
+      (lambda (existing)
         (bucket-insert store
-                       (bitstring-take id 1)
-                       (make-node id: id
-                                  ip: ip
-                                  port: port
-                                  first-seen: (current-seconds)
-                                  last-seen: (current-seconds)
-                                  failed-requests: 0)))))
+                       prefix
+                       (update-node existing
+                                    last-seen: (current-seconds)))))
+     ;; if bucket is full, split and try again or discard new ndoe
+     ((>= (bucket-size store prefix) (max-bucket-size))
+      ;; can bucket be split?
+      (when (bitstring-prefix? prefix (local-id store))
+        (bucket-split store prefix)
+        (update-routing-table store id ip port)))
+     ;; bucket has space, insert new node
+     (else
+      (bucket-insert store
+                     prefix
+                     (make-node id: id
+                                ip: ip
+                                port: port
+                                first-seen: (current-seconds)
+                                last-seen: (current-seconds)
+                                failed-requests: 0))))))
 
 )

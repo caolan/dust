@@ -698,7 +698,8 @@
             #${5555555555555555555555555555555555555555} ; 01010101
             "192.168.0.104"
             4219))
-         (test (list (make-node id: #${0000000000000000000000000000000000000000}
+         (test "new entry is discarded"
+               (list (make-node id: #${0000000000000000000000000000000000000000}
                                 ip: "192.168.0.101"
                                 port: 4219
                                 first-seen: 300
@@ -722,5 +723,67 @@
                (lazy-seq->list
                 (bucket-nodes store (list->bitstring '(1)))))
          )))))
+
+(test-group "update-routing-table: inserting existing node into full bucket updates last-seen"
+  (with-test-store
+   (lambda (store)
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+       ;; use a fixed ID so bucket splits are predictable
+       (local-id-set! store test-id)
+       (parameterize
+           ;; use a small 'k' parameter (bucket size)
+           ((max-bucket-size 3))
+         ;;  use a fixed current time for comparisons
+         (fluid-let ((current-seconds (cut identity 300)))
+           (update-routing-table
+            store
+            #${0000000000000000000000000000000000000000} ; 00000000
+            "192.168.0.101"
+            4219))
+         (fluid-let ((current-seconds (cut identity 400)))
+           (update-routing-table
+            store
+            #${3333333333333333333333333333333333333333} ; 00110011
+            "192.168.0.102"
+            4219))
+         (fluid-let ((current-seconds (cut identity 500)))
+           (update-routing-table
+            store
+            #${4444444444444444444444444444444444444444} ; 01000100
+            "192.168.0.103"
+            4219))
+         (fluid-let ((current-seconds (cut identity 600)))
+           (update-routing-table
+            store
+            #${0000000000000000000000000000000000000000} ; 01010101
+            "192.168.0.104"
+            4219))
+         (test "new entry is discarded"
+               (list (make-node id: #${0000000000000000000000000000000000000000}
+                                ip: "192.168.0.101"
+                                port: 4219
+                                first-seen: 300
+                                last-seen: 600
+                                failed-requests: 0)
+                     (make-node id: #${3333333333333333333333333333333333333333}
+                                ip: "192.168.0.102"
+                                port: 4219
+                                first-seen: 400
+                                last-seen: 400
+                                failed-requests: 0)
+                     (make-node id: #${4444444444444444444444444444444444444444}
+                                ip: "192.168.0.103"
+                                port: 4219
+                                first-seen: 500
+                                last-seen: 500
+                                failed-requests: 0))
+               (lazy-seq->list
+                (bucket-nodes store (list->bitstring '(0)))))
+         (test '()
+               (lazy-seq->list
+                (bucket-nodes store (list->bitstring '(1)))))
+         )))))
+
+;; TODO: test that an insert into a full bucket of an existing node still updates last-seen
 
 (test-exit)
