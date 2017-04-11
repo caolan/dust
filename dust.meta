@@ -9,6 +9,9 @@
         matchable
         srfi-117
         bencode
+        gochan
+        socket
+        udp6
         endian-blob
         pathname-expand
         unix-sockets)
