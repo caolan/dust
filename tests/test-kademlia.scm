@@ -17,7 +17,7 @@
 (define (with-test-store thunk)
   (clear-testdb)
   (let ((env (kademlia-env-open "tests/testdb")))
-    (with-kademlia-store env thunk)
+    (with-store env thunk)
     (mdb-env-close env)))
 
 (test-group "prefix->blob and blob->prefix"
@@ -428,8 +428,8 @@
            (lazy-seq->list
             (lazy-map (lambda (k)
                         (bitstring->list (blob->prefix k)))
-                      (keys (kademlia-store-txn store)
-                            (kademlia-store-routing-table store)))))
+                      (keys (store-txn store)
+                            (store-routing-table store)))))
      (test-assert
          (bitstring=?
           (list->bitstring '(0 1 1 1))
@@ -784,6 +784,25 @@
                 (bucket-nodes store (list->bitstring '(1)))))
          )))))
 
-;; TODO: test that an insert into a full bucket of an existing node still updates last-seen
+(define (with-test-servers thunk)
+  (clear-testdb "tests/testdb1")
+  (clear-testdb "tests/testdb2")
+  (with-server
+   "tests/testdb1"
+   "127.0.0.1"
+   4217
+   (lambda (server1)
+     (with-server
+      "tests/testdb2"
+      "127.0.0.1"
+      4218
+      (lambda (server2)
+        (thunk server1 server2))))))
+
+(test-group "PING"
+  (with-test-servers
+   (lambda (server1 server2)
+     (test "PONG" (ping server1 "127.0.0.1" 4218))
+     (test "PONG" (ping server2 "127.0.0.1" 4217)))))
 
 (test-exit)

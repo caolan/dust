@@ -2,6 +2,7 @@
 /bench/tmp-db
 /tests/testdb
 /tests/testdb-copy
+/tests/testdb1
 /tests/testdb2
 /lib/*.so
 /lib/*.scm

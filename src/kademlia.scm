@@ -18,16 +18,16 @@
  node->blob
  blob->node
  kademlia-env-open
- kademlia-store-open
- kademlia-store-txn
- kademlia-store-routing-table
- kademlia-store-metadata
+ store-open
+ store-txn
+ store-routing-table
+ store-metadata
  routing-table-open
  metadata-open
  random-id
  local-id
  local-id-set!
- with-kademlia-store
+ with-store
  prefix->blob
  blob->prefix
  prefix-blob-compare
@@ -42,7 +42,6 @@
  bucket-size
  find-bucket-for-id
  update-routing-table
-
  dispatcher-start
  dispatcher-listener
  dispatcher-router
@@ -50,6 +49,10 @@
  dispatcher-outbox
  dispatcher-cancellations
  dispatcher-threads-join
+ dispatcher-threads-terminate
+ server-start
+ server-stop
+ with-server
  send-rpc
  ping)
 
@@ -98,16 +101,16 @@
            (node-last-seen x)
            (node-failed-requests x)))
 
-(define-record kademlia-store
+(define-record store
   txn
   routing-table
   metadata)
 
-(define-record-printer (kademlia-store x out)
-  (fprintf out "#<kademlia-store ~S ~S ~S>"
-           (kademlia-store-txn x)
-           (kademlia-store-routing-table x)
-           (kademlia-store-metadata x)))
+(define-record-printer (store x out)
+  (fprintf out "#<store ~S ~S ~S>"
+           (store-txn x)
+           (store-routing-table x)
+           (store-metadata x)))
 
 (define (node->blob node)
   (assert (= 20 (blob-size (node-id node))))
@@ -136,6 +139,7 @@
                 failed-requests: failed-requests))))
 
 (define (kademlia-env-open path)
+  (create-directory path #t)
   (let ((env (mdb-env-create)))
     (mdb-env-set-mapsize env 10000000)
     (mdb-env-set-maxdbs env 2)
@@ -143,13 +147,13 @@
                   (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
     env))
 
-(define (kademlia-store-open txn)
-  (make-kademlia-store txn
+(define (store-open txn)
+  (make-store txn
                        (routing-table-open txn)
                        (metadata-open txn)))
 
-(define (with-kademlia-store env thunk)
-  (with-transaction env (compose thunk kademlia-store-open)))
+(define (with-store env thunk)
+  (with-transaction env (compose thunk store-open)))
 
 (define (prefix->blob prefix)
   (bitstring->blob
@@ -279,8 +283,8 @@
 
 (define (local-id-set! store id)
   (assert (= 20 (blob-size id)))
-  (mdb-put (kademlia-store-txn store)
-           (kademlia-store-metadata store)
+  (mdb-put (store-txn store)
+           (store-metadata store)
            (string->blob "local-id")
            id
            0))
@@ -290,8 +294,8 @@
 
 (define (local-id store)
   (condition-case
-      (mdb-get (kademlia-store-txn store)
-               (kademlia-store-metadata store)
+      (mdb-get (store-txn store)
+               (store-metadata store)
                (string->blob "local-id"))
     ((exn lmdb MDB_NOTFOUND)
      (let ((new-id  (random-id)))
@@ -300,29 +304,29 @@
 
 (define (bucket-nodes store prefix)
   ;; (printf "bucket-nodes: ~S ~S ~S~n" txn dbi prefix)
-  (lazy-map blob->node (dup-values (kademlia-store-txn store)
-                                   (kademlia-store-routing-table store)
+  (lazy-map blob->node (dup-values (store-txn store)
+                                   (store-routing-table store)
                                    (prefix->blob prefix))))
 
 (define (bucket-insert store prefix node)
   ;; (printf "bucket-insert: ~S ~S ~S ~S~n" txn dbi prefix node)
-  (mdb-put (kademlia-store-txn store)
-           (kademlia-store-routing-table store)
+  (mdb-put (store-txn store)
+           (store-routing-table store)
            (prefix->blob prefix)
            (node->blob node)
            0))
 
 (define (bucket-remove store prefix node)
   ;; (printf "bucket-remove: ~S ~S ~S ~S~n" txn dbi prefix node)
-  (mdb-del (kademlia-store-txn store)
-           (kademlia-store-routing-table store)
+  (mdb-del (store-txn store)
+           (store-routing-table store)
            (prefix->blob prefix)
            (node->blob node)))
 
 (define (bucket-destroy store prefix)
   ;; (printf "bucket-destroy: ~S ~S ~S~n" txn dbi prefix)
-  (mdb-del (kademlia-store-txn store)
-           (kademlia-store-routing-table store)
+  (mdb-del (store-txn store)
+           (store-routing-table store)
            (prefix->blob prefix)))
 
 (define (bucket-split store prefix)
@@ -345,8 +349,8 @@
          (parent-key (prefix->blob parent))
          (child-0-key (prefix->blob child-0))
          (child-1-key (prefix->blob child-1))
-         (txn (kademlia-store-txn store))
-         (dbi (kademlia-store-routing-table store)))
+         (txn (store-txn store))
+         (dbi (store-routing-table store)))
     (lazy-each (cut mdb-put txn dbi parent-key <> 0)
                (dup-values txn dbi child-0-key))
     (lazy-each (cut mdb-put txn dbi parent-key <> 0)
@@ -355,8 +359,8 @@
     (mdb-del txn dbi child-1-key)))
 
 (define (bucket-size store prefix)
-  (dup-count (kademlia-store-txn store)
-             (kademlia-store-routing-table store)
+  (dup-count (store-txn store)
+             (store-routing-table store)
              (prefix->blob prefix)))
 
 (define (bucket-find store prefix id)
@@ -368,8 +372,8 @@
 (define (find-bucket-for-id store id)
   (let ((id (blob->bitstring id)))
     (with-cursor
-     (kademlia-store-txn store)
-     (kademlia-store-routing-table store)
+     (store-txn store)
+     (store-routing-table store)
      (lambda (cursor)
        (let ((key (and (mdb-cursor-get/default
                         cursor (prefix->blob id) #f MDB_SET_RANGE #f)
@@ -507,18 +511,46 @@
   (thread-join! (dispatcher-listener dispatcher))
   (thread-join! (dispatcher-router dispatcher)))
 
-(define (send-rpc dispatcher to-host to-port method params #!key (timeout 5000))
+(define (dispatcher-threads-terminate dispatcher)
+  (thread-terminate! (dispatcher-listener dispatcher))
+  (thread-terminate! (dispatcher-router dispatcher)))
+
+(define-record server
+  env socket dispatcher)
+
+(define (server-start path host port)
+  (let ((socket (udp-open-socket)))
+    (udp-bind! socket host port)
+    (let ((env (kademlia-env-open path))
+          (dispatcher (dispatcher-start socket)))
+      (make-server env socket dispatcher))))
+
+(define (server-stop server)
+  (dispatcher-threads-terminate (server-dispatcher server))
+  (udp-close-socket (server-socket server))
+  (mdb-env-close (server-env server)))
+
+(define (with-server path host port thunk)
+  (let ((server (server-start path host port)))
+    (handle-exceptions exn
+      (begin
+        (server-stop server)
+        (abort exn))
+      (thunk server)
+      (server-stop server))))
+
+(define (send-rpc server to-host to-port method params #!key (timeout 5000))
   (let* ((msg-id (blob->string (random-id)))
          (response (gochan 0))
          (msg (if params
                   (vector msg-id method params)
                   (vector msg-id method))))
-    (gochan-send (dispatcher-outbox dispatcher)
+    (gochan-send (dispatcher-outbox (server-dispatcher server))
                  (list  msg to-host to-port response))
     (gochan-select
      ((response -> msg) msg)
      (((gochan-after timeout) -> _)
-      (gochan-send (dispatcher-cancellations dispatcher) msg-id)
+      (gochan-send (dispatcher-cancellations (server-dispatcher server)) msg-id)
       (abort (make-composite-condition
               (make-property-condition 'exn
                                        'location 'send-rpc
@@ -526,7 +558,7 @@
               (make-property-condition 'kademlia-rpc)
               (make-property-condition 'timeout)))))))
   
-(define (ping dispatcher host port)
-  (send-rpc dispatcher host port "PING" #f))
+(define (ping server host port)
+  (send-rpc server host port "PING" #f))
 
 )
