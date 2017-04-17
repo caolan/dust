@@ -42,19 +42,23 @@
  bucket-size
  find-bucket-for-id
  update-routing-table
- dispatcher-start
- dispatcher-listener
- dispatcher-router
- dispatcher-inbox
- dispatcher-outbox
- dispatcher-cancellations
- dispatcher-threads-join
- dispatcher-threads-terminate
+ rpc-manager-start
+ rpc-manager-listener
+ rpc-manager-dispatcher
+ rpc-manager-inbox
+ rpc-manager-outbox
+ rpc-manager-cancellations
+ rpc-manager-threads-join
+ rpc-manager-threads-terminate
  server-start
  server-stop
  with-server
- send-rpc
- ping)
+ server-id
+ server-id-set!
+ rpc-send
+ send-ping
+ send-store
+ send-find-value)
 
 (import chicken scheme foreign)
 
@@ -76,6 +80,7 @@
      defstruct
      dust.bitstring-utils
      dust.lazy-seq-utils
+     dust.alist-utils
      dust.lmdb-utils)
 
 (foreign-declare "#include <lmdb.h>")
@@ -149,8 +154,8 @@
 
 (define (store-open txn)
   (make-store txn
-                       (routing-table-open txn)
-                       (metadata-open txn)))
+              (routing-table-open txn)
+              (metadata-open txn)))
 
 (define (with-store env thunk)
   (with-transaction env (compose thunk store-open)))
@@ -434,99 +439,128 @@
                                 last-seen: (current-seconds)
                                 failed-requests: 0))))))
 
-;; decodes incoming messages and places them onto the inbox channel
-(define (listener socket inbox)
-  (receive (n data from-host from-port) (udp-recvfrom socket 556)
-    (condition-case
-        ;; TODO: wiki says sending on a closed channel is not an error!
-        ;;       so if the channel closes this will continue to run
-        (gochan-send inbox (list (string->bencode data) from-host from-port))
-      ((exn bencode)
-       ;; report invalid message, then just ignore
-       (fprintf (current-error-port)
-                "Invalid bencode from ~A:~A"
-                from-host
-                from-port))))
-  (listener socket inbox))
+(define (receive-ping env tid params from-host from-port)
+  (with-store env
+              (lambda (store)
+                `((tid . ,tid)
+                  (type . "r")
+                  (data . ,(blob->string (local-id store)))))))
 
-;; routes messages from outbox to remote addresses, and incoming
-;; remote messages to the appropriate server handler or RPC request
-(define (router socket inbox outbox cancellations
-                #!optional (current-requests
-                            (make-hash-table string=? string-hash)))
+(define rpc-handlers
+  (alist->hash-table
+   `(("PING" . ,receive-ping))
+   string=?
+   string-hash))
+
+;; places incoming bencoded messages onto a channel
+(define (rpc-listener socket channel)
+  (receive (n data from-host from-port) (udp-recvfrom socket 556)
+    (let ((msg (condition-case (string->bencode data)
+                 ((exn bencode) #f))))
+      (if msg
+          (gochan-send channel (list msg from-host from-port))
+          (fprintf (current-error-port)
+                   "Invalid incoming bencode message (from ~A:~A)~n"
+                   from-host
+                   from-port))))
+  (rpc-listener socket channel))
+
+(define (send-to-channel channels tid data from-host from-port)
+  (let ((channel (hash-table-ref/default channels tid #f)))
+    (if channel
+        (begin
+          (hash-table-delete! channels tid)
+          (gochan-send channel data))
+        (fprintf (current-error-port)
+                 "Missing transaction ID: ~A (from ~A:~A)~n"
+                 (bin->hex (string->blob tid))
+                 from-host
+                 from-port))))
+
+(define (rpc-dispatcher env socket inbox outbox cancellations waiting)
   (gochan-select
    ((inbox -> msg)
-    (match msg
-      ((#(id "PING") from-host from-port)
-       (udp-sendto socket
-                   from-host
-                   from-port
-                   (bencode->string (vector id 0 "PONG"))))
-      ((#(id error result) from-host from-port)
-       (let ((channel (hash-table-ref/default current-requests id #f)))
-         (if channel
-             (begin
-               (hash-table-delete! current-requests id)
-               (gochan-send channel result))
-             (fprintf
-              (current-error-port)
-              "Ignoring message with unknown ID ~S, from ~A:~A"
-              id
-              from-host
-              from-port))))
-      ((_ from-host from-port)
-       (fprintf (current-error-port)
-                "Invalid response format from ~A:~A"
-                from-host
-                from-port))))
+    (match-let (((data from-host from-port) msg))
+      (match-alist data
+       (((type . "q") tid method)
+        (let ((params (alist-ref 'params data))
+              (handler (hash-table-ref/default rpc-handlers method #f)))
+          (if handler
+              (let ((data (handler env tid params from-host from-port)))
+                (condition-case
+                    (udp-sendto socket
+                                from-host
+                                from-port
+                                (bencode->string data))
+                  ((exn bencode)
+                   (fprintf (current-error-port)
+                            "Invalid bencode returned by '~A' method handler~n"
+                            method))))
+              (fprintf (current-error-port)
+                       "No handler for method '~A' (from ~A:~A)~n"
+                       method
+                       from-host
+                       from-port))))
+       (((type . "r") tid)
+        (send-to-channel waiting tid data from-host from-port))
+       (((type . "e") tid)
+        (send-to-channel waiting tid data from-host from-port))
+       (else
+        (fprintf (current-error-port)
+                 "Invalid message format (from ~A:~A)~n"
+                 from-host
+                 from-port)))))
    ((outbox -> msg)
-    (match msg
-      ((#(id method ...) to-host to-port response)
-       (hash-table-set! current-requests id response)
-       (udp-sendto socket to-host to-port (bencode->string (car msg))))))
-   ((cancellations -> id)
-    (hash-table-delete! current-requests id)))
-  (router socket inbox outbox cancellations current-requests))
+    (match-let (((data to-host to-port channel) msg))
+      (match-alist
+       data
+       ((tid)
+        (hash-table-set! waiting tid channel)
+        (udp-sendto socket to-host to-port (bencode->string data))))))
+   ((cancellations -> tid)
+    (hash-table-delete! waiting tid)))
+  (rpc-dispatcher env socket inbox outbox cancellations waiting))
 
-(define-record dispatcher
-  inbox outbox cancellations listener router)
+(define-record rpc-manager
+  inbox outbox cancellations waiting listener dispatcher)
 
-;; creates a new dispatcher for use with RPC calls, sets up
+;; creates a new RPC manager for use with RPC calls, sets up
 ;; inbox/outbox channels and starts listener/dispatcher threads
-(define (dispatcher-start socket)
+(define (rpc-manager-start env socket)
   (let ((inbox (gochan 0))
         (outbox (gochan 0))
-        (cancellations (gochan 0)))
-    (make-dispatcher
+        (cancellations (gochan 0))
+        (waiting (make-hash-table string=? string-hash)))
+    (make-rpc-manager
      inbox
      outbox
      cancellations
+     waiting
      (go (parameterize
              ((socket-receive-timeout #f))
-           (listener socket inbox)))
-     (go (router socket inbox outbox cancellations)))))
+           (rpc-listener socket inbox)))
+     (go (rpc-dispatcher env socket inbox outbox cancellations waiting)))))
 
 ;; waits for all dispatcher threads to terminate
-(define (dispatcher-threads-join dispatcher)
-  (thread-join! (dispatcher-listener dispatcher))
-  (thread-join! (dispatcher-router dispatcher)))
+(define (rpc-manager-threads-join rpc-manager)
+  (thread-join! (rpc-manager-listener rpc-manager))
+  (thread-join! (rpc-manager-dispatcher rpc-manager)))
 
-(define (dispatcher-threads-terminate dispatcher)
-  (thread-terminate! (dispatcher-listener dispatcher))
-  (thread-terminate! (dispatcher-router dispatcher)))
+(define (rpc-manager-threads-terminate rpc-manager)
+  (thread-terminate! (rpc-manager-listener rpc-manager))
+  (thread-terminate! (rpc-manager-dispatcher rpc-manager)))
 
-(define-record server
-  env socket dispatcher)
+(define-record server env socket rpc-manager)
 
 (define (server-start path host port)
   (let ((socket (udp-open-socket)))
     (udp-bind! socket host port)
-    (let ((env (kademlia-env-open path))
-          (dispatcher (dispatcher-start socket)))
-      (make-server env socket dispatcher))))
+    (let* ((env (kademlia-env-open path))
+           (rpc-manager (rpc-manager-start env socket)))
+      (make-server env socket rpc-manager))))
 
 (define (server-stop server)
-  (dispatcher-threads-terminate (server-dispatcher server))
+  (rpc-manager-threads-terminate (server-rpc-manager server))
   (udp-close-socket (server-socket server))
   (mdb-env-close (server-env server)))
 
@@ -539,26 +573,51 @@
       (thunk server)
       (server-stop server))))
 
-(define (send-rpc server to-host to-port method params #!key (timeout 5000))
-  (let* ((msg-id (blob->string (random-id)))
+(define (server-id server)
+  (with-store (server-env server)
+              (cut local-id <>)))
+
+(define (server-id-set! server id)
+  ;; TODO: purge existing routing table, it is no longer valid!
+  (with-store (server-env server)
+              (cut local-id-set! <> id)))
+
+(define (rpc-send server to-host to-port method params #!key (timeout 5000))
+  (let* ((manager (server-rpc-manager server))
+         (tid (blob->string (random-id)))
          (response (gochan 0))
-         (msg (if params
-                  (vector msg-id method params)
-                  (vector msg-id method))))
-    (gochan-send (dispatcher-outbox (server-dispatcher server))
-                 (list  msg to-host to-port response))
+         (msg (append `((tid . ,tid)
+                        (type . "q")
+                        (method . ,method))
+                      (if params `((params . ,params)) '()))))
+    (gochan-send (rpc-manager-outbox manager)
+                 (list msg to-host to-port response))
     (gochan-select
-     ((response -> msg) msg)
+     ((response -> msg)
+      (match-alist msg
+                   (((type . "r") data) data)
+                   (((type . "e") code desc)
+                    (abort (make-composite-condition
+                            (make-property-condition 'exn
+                                                     'description desc)
+                            (make-property-condition 'kademlia-rpc
+                                                     'code code))))))
      (((gochan-after timeout) -> _)
-      (gochan-send (dispatcher-cancellations (server-dispatcher server)) msg-id)
+      (gochan-send (rpc-manager-cancellations manager) tid)
       (abort (make-composite-condition
               (make-property-condition 'exn
-                                       'location 'send-rpc
-                                       'description "RPC call timed out")
+                                       'description (string-append
+                                                     method " call timed out"))
               (make-property-condition 'kademlia-rpc)
               (make-property-condition 'timeout)))))))
   
-(define (ping server host port)
-  (send-rpc server host port "PING" #f))
+(define (send-ping server host port)
+  (string->blob (rpc-send server host port "PING" #f)))
+
+(define (send-store server host port key value)
+  (rpc-send server host port "STORE" (vector key value)))
+
+(define (send-find-value server host port key)
+  (rpc-send server host port "FIND_VALUE" key))
 
 )

@@ -3,16 +3,18 @@
      bitstring
      dust.kademlia
      lmdb-lolevel
+     files
      srfi-4
      lazy-seq
      sodium
+     matchable
      dust.lmdb-utils
      dust.bitstring-utils)
 
 (define (clear-testdb #!optional (path "tests/testdb"))
   (when (file-exists? path)
     (delete-directory path #t))
-  (create-directory path))
+  (create-directory path #t))
 
 (define (with-test-store thunk)
   (clear-testdb)
@@ -784,25 +786,49 @@
                 (bucket-nodes store (list->bitstring '(1)))))
          )))))
 
-(define (with-test-servers thunk)
-  (clear-testdb "tests/testdb1")
-  (clear-testdb "tests/testdb2")
-  (with-server
-   "tests/testdb1"
-   "127.0.0.1"
-   4217
-   (lambda (server1)
-     (with-server
-      "tests/testdb2"
-      "127.0.0.1"
-      4218
-      (lambda (server2)
-        (thunk server1 server2))))))
+(define (with-test-servers configs thunk #!optional (servers '()))
+  (if (null? configs)
+   (apply thunk (reverse servers))
+   (match (car configs)
+     ((id host port)
+      (let ((db-path (make-pathname "tests/server-dbs/" (bin->hex id))))
+        (clear-testdb db-path)
+        (with-server
+         db-path
+         host
+         port
+         (lambda (server)
+           (server-id-set! server id)
+           (with-test-servers
+            (cdr configs) thunk (cons server servers)))))))))
 
 (test-group "PING"
   (with-test-servers
+   '((#${0000000000000000000000000000000000000000} "127.0.0.1" 4218)
+     (#${ffffffffffffffffffffffffffffffffffffffff} "127.0.0.1" 4217))
    (lambda (server1 server2)
-     (test "PONG" (ping server1 "127.0.0.1" 4218))
-     (test "PONG" (ping server2 "127.0.0.1" 4217)))))
+     (test #${ffffffffffffffffffffffffffffffffffffffff}
+           (send-ping server1 "127.0.0.1" 4217))
+     (test #${0000000000000000000000000000000000000000}
+           (send-ping server2 "127.0.0.1" 4218)))))
+
+;; (test-group "simple STORE and FIND_VALUE"
+;;   (with-test-servers
+;;    '((#${0000000000000000000000000000000000000000} "127.0.0.1" 4218)
+;;      (#${ffffffffffffffffffffffffffffffffffffffff} "127.0.0.1" 4217))
+;;    (lambda (server1 server2)
+;;      ;; (store-rpc server2 "127.0.0.1" 4218 "key-one" "value-one")
+;;      ;; (store-rpc server1 "127.0.0.1" 4217 "key-two" "value-two")
+;;      (send-store server2 "127.0.0.1" 4217 "key-one" "value-one")
+;;      (send-store server1 "127.0.0.1" 4218 "key-two" "value-two")
+;;      ;; (test "value-one" (find-value-rpc server2 "127.0.0.1" 4218 "key-one"))
+;;      ;; (test "value-two" (find-value-rpc server1 "127.0.0.1" 4217 "key-two")))))
+;;      (test "value-one" (send-find-value server2 "127.0.0.1" 4217 "key-one"))
+;;      (test "value-two" (send-find-value server1 "127.0.0.1" 4218 "key-two")))))
+
+;; TODO: create procedure to find new unbound port number have
+;;       server-start acception port as optional - if defined bind
+;;       only to that port (when you've opened that port in your
+;;       firewall), otherwise find any unbound random port to use
 
 (test-exit)

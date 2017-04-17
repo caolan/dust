@@ -2,8 +2,8 @@
 /bench/tmp-db
 /tests/testdb
 /tests/testdb-copy
-/tests/testdb1
 /tests/testdb2
+/tests/server-dbs
 /lib/*.so
 /lib/*.scm
 /bin/dust
