@@ -9,14 +9,6 @@
 (use srfi-1 srfi-69)
 
 
-;; TODO: update match-alist-keys to be match-alist
-;;       and add support for matching values against key,
-;;       e.g. (match-alist x (((type . "q") method params)
-;;                            (print method)))
-
-;; TODO: use this to match messages in generic incoming and outgoing gochan's for dispatcher
-;;       instead of having so many different channels?
-
 (define (match-hash-table-patterns ht keys)
   (call/cc
    (lambda (k)

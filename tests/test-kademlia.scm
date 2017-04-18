@@ -812,19 +812,19 @@
      (test #${0000000000000000000000000000000000000000}
            (send-ping server2 "127.0.0.1" 4218)))))
 
-;; (test-group "simple STORE and FIND_VALUE"
-;;   (with-test-servers
-;;    '((#${0000000000000000000000000000000000000000} "127.0.0.1" 4218)
-;;      (#${ffffffffffffffffffffffffffffffffffffffff} "127.0.0.1" 4217))
-;;    (lambda (server1 server2)
-;;      ;; (store-rpc server2 "127.0.0.1" 4218 "key-one" "value-one")
-;;      ;; (store-rpc server1 "127.0.0.1" 4217 "key-two" "value-two")
-;;      (send-store server2 "127.0.0.1" 4217 "key-one" "value-one")
-;;      (send-store server1 "127.0.0.1" 4218 "key-two" "value-two")
-;;      ;; (test "value-one" (find-value-rpc server2 "127.0.0.1" 4218 "key-one"))
-;;      ;; (test "value-two" (find-value-rpc server1 "127.0.0.1" 4217 "key-two")))))
-;;      (test "value-one" (send-find-value server2 "127.0.0.1" 4217 "key-one"))
-;;      (test "value-two" (send-find-value server1 "127.0.0.1" 4218 "key-two")))))
+(test-group "simple STORE and FIND_VALUE"
+  (with-test-servers
+   '((#${0000000000000000000000000000000000000000} "127.0.0.1" 4218)
+     (#${ffffffffffffffffffffffffffffffffffffffff} "127.0.0.1" 4217))
+   (lambda (server1 server2)
+     ;; (store-rpc server2 "127.0.0.1" 4218 "key-one" "value-one")
+     ;; (store-rpc server1 "127.0.0.1" 4217 "key-two" "value-two")
+     (send-store server2 "127.0.0.1" 4217 "key-one" "value-one")
+     (send-store server1 "127.0.0.1" 4218 "key-two" "value-two")
+     ;; (test "value-one" (find-value-rpc server2 "127.0.0.1" 4218 "key-one"))
+     ;; (test "value-two" (find-value-rpc server1 "127.0.0.1" 4217 "key-two")))))
+     (test "value-one" (send-find-value server2 "127.0.0.1" 4217 "key-one"))
+     (test "value-two" (send-find-value server1 "127.0.0.1" 4218 "key-two")))))
 
 ;; TODO: create procedure to find new unbound port number have
 ;;       server-start acception port as optional - if defined bind

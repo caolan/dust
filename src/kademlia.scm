@@ -109,7 +109,8 @@
 (define-record store
   txn
   routing-table
-  metadata)
+  metadata
+  data)
 
 (define-record-printer (store x out)
   (fprintf out "#<store ~S ~S ~S>"
@@ -147,7 +148,7 @@
   (create-directory path #t)
   (let ((env (mdb-env-create)))
     (mdb-env-set-mapsize env 10000000)
-    (mdb-env-set-maxdbs env 2)
+    (mdb-env-set-maxdbs env 3)
     (mdb-env-open env path MDB_NOSYNC
                   (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
     env))
@@ -155,7 +156,8 @@
 (define (store-open txn)
   (make-store txn
               (routing-table-open txn)
-              (metadata-open txn)))
+              (metadata-open txn)
+              (data-open txn)))
 
 (define (with-store env thunk)
   (with-transaction env (compose thunk store-open)))
@@ -285,6 +287,9 @@
 
 (define (metadata-open txn)
   (mdb-dbi-open txn "metadata" MDB_CREATE))
+
+(define (data-open txn)
+  (mdb-dbi-open txn "data" MDB_CREATE))
 
 (define (local-id-set! store id)
   (assert (= 20 (blob-size id)))
@@ -446,9 +451,62 @@
                   (type . "r")
                   (data . ,(blob->string (local-id store)))))))
 
+(define (receive-store env tid params from-host from-port)
+  (match-alist
+   params
+   ((key val)
+    (if (and (string? key) (string? val))
+        (begin
+          (with-store env
+                      (lambda (store)
+                        (mdb-put (store-txn store)
+                                 (store-data store)
+                                 (string->blob key)
+                                 (string->blob val)
+                                 0)))
+          (with-store env
+                      (lambda (store)
+                        `((tid . ,tid)
+                          (type . "r")
+                          (data . ,(blob->string (local-id store)))))))
+        `((tid . ,tid)
+          (type . "e")
+          (code . 400)
+          (desc . "Invalid STORE request"))))
+   (else
+    `((tid . ,tid)
+      (type . "e")
+      (code . 400)
+      (desc . "Invalid STORE request")))))
+
+(define (receive-find-value env tid params from-host from-port)
+  (match-alist
+   params
+   ((key)
+    (with-store env
+                (lambda (store)
+                  (if (string? key)
+                      `((tid . ,tid)
+                        (type . "r")
+                        (data . ,(blob->string
+                                  (mdb-get (store-txn store)
+                                           (store-data store)
+                                           (string->blob key)))))
+                      `((tid . ,tid)
+                        (type . "e")
+                        (code . 400)
+                        (desc . "Invalid FIND_VALUE request"))))))
+   (else
+    `((tid . ,tid)
+      (type . "e")
+      (code . 400)
+      (desc . "Invalid FIND_VALUE request")))))
+
 (define rpc-handlers
   (alist->hash-table
-   `(("PING" . ,receive-ping))
+   `(("PING" . ,receive-ping)
+     ("STORE" . ,receive-store)
+     ("FIND_VALUE" . ,receive-find-value))
    string=?
    string-hash))
 
@@ -465,6 +523,7 @@
                    from-port))))
   (rpc-listener socket channel))
 
+;; TODO: validate that returned tid is from the same host:port that the original query was sent to!
 (define (send-to-channel channels tid data from-host from-port)
   (let ((channel (hash-table-ref/default channels tid #f)))
     (if channel
@@ -615,9 +674,9 @@
   (string->blob (rpc-send server host port "PING" #f)))
 
 (define (send-store server host port key value)
-  (rpc-send server host port "STORE" (vector key value)))
+  (rpc-send server host port "STORE" `((key . ,key) (val . ,value))))
 
 (define (send-find-value server host port key)
-  (rpc-send server host port "FIND_VALUE" key))
+  (rpc-send server host port "FIND_VALUE" `((key . ,key))))
 
 )
