@@ -9,10 +9,10 @@
         (compile -O2 -d1 -inline "../src/dust.scm" -o "../bin/dust"))
        ("dustd" ("../src/dustd.scm")
         (compile -O2 -d1 -inline "../src/dustd.scm" -o "../bin/dustd"))
-       ("dust.alist-utils.so" ("../src/alist-utils.scm")
-        (compile -O2 -d1 -inline -s "../src/alist-utils.scm" -J
-                 -o "dust.alist-utils.so")
-        (compile -O2 -d0 -s "dust.alist-utils.import.scm"))
+       ("dust.alist-match.so" ("../src/alist-match.scm")
+        (compile -O2 -d1 -inline -s "../src/alist-match.scm" -J
+                 -o "dust.alist-match.so")
+        (compile -O2 -d0 -s "dust.alist-match.import.scm"))
        ("dust.u8vector-utils.so" ("../src/u8vector-utils.scm")
         (compile -O2 -d1 -inline -s "../src/u8vector-utils.scm" -J
                  -o "dust.u8vector-utils.so")
@@ -66,7 +66,7 @@
                  -o "dust.client.so")
         (compile -O2 -d0 -s "dust.client.import.scm")))
   '("dust.u8vector-utils.so"
-    "dust.alist-utils.so"
+    "dust.alist-match.so"
     "dust.bitstring-utils.so"
     "dust.lazy-seq-utils.so"
     "dust.lmdb-utils.so"
@@ -98,8 +98,8 @@
     "dust.connection.import.so"
     "dust.environment.so"
     "dust.environment.import.so"
-    "dust.alist-utils.so"
-    "dust.alist-utils.import.so"
+    "dust.alist-match.so"
+    "dust.alist-match.import.so"
     "dust.u8vector-utils.so"
     "dust.u8vector-utils.import.so"
     "dust.bitstring-utils.so"

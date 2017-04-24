@@ -80,7 +80,7 @@
      defstruct
      dust.bitstring-utils
      dust.lazy-seq-utils
-     dust.alist-utils
+     dust.alist-match
      dust.lmdb-utils)
 
 (foreign-declare "#include <lmdb.h>")
@@ -452,7 +452,7 @@
                   (data . ,(blob->string (local-id store)))))))
 
 (define (receive-store env tid params from-host from-port)
-  (match-alist
+  (alist-match
    params
    ((key val)
     (if (and (string? key) (string? val))
@@ -480,7 +480,7 @@
       (desc . "Invalid STORE request")))))
 
 (define (receive-find-value env tid params from-host from-port)
-  (match-alist
+  (alist-match
    params
    ((key)
     (with-store env
@@ -540,7 +540,7 @@
   (gochan-select
    ((inbox -> msg)
     (match-let (((data from-host from-port) msg))
-      (match-alist data
+      (alist-match data
        (((type . "q") tid method)
         (let ((params (alist-ref 'params data))
               (handler (hash-table-ref/default rpc-handlers method #f)))
@@ -571,7 +571,7 @@
                  from-port)))))
    ((outbox -> msg)
     (match-let (((data to-host to-port channel) msg))
-      (match-alist
+      (alist-match
        data
        ((tid)
         (hash-table-set! waiting tid channel)
@@ -653,7 +653,7 @@
                  (list msg to-host to-port response))
     (gochan-select
      ((response -> msg)
-      (match-alist msg
+      (alist-match msg
                    (((type . "r") data) data)
                    (((type . "e") code desc)
                     (abort (make-composite-condition
