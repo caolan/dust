@@ -50,21 +50,30 @@
  rpc-manager-cancellations
  rpc-manager-threads-join
  rpc-manager-threads-terminate
+ rpc-send
+ send-ping
+ send-store
+ send-find-value
+ send-find-node
  server-start
  server-stop
  with-server
  server-id
  server-id-set!
- rpc-send
- send-ping
- send-store
- send-find-value)
+ server-add-node
+ server-all-nodes
+ server-has-node?
+ server-events
+ join-network
+ distance
+ closest-node)
 
 (import chicken scheme foreign)
 
 (use lmdb-lolevel
      lazy-seq
      srfi-4
+     srfi-1
      data-structures
      sodium
      posix
@@ -78,10 +87,16 @@
      matchable
      bitstring
      defstruct
+     log5scm
+     dust.u8vector-utils
      dust.bitstring-utils
      dust.lazy-seq-utils
      dust.alist-match
      dust.lmdb-utils)
+
+;; logging category
+(define-category kademlia)
+(define-category debug)
 
 (foreign-declare "#include <lmdb.h>")
 (foreign-declare "#include <string.h>")
@@ -340,7 +355,7 @@
            (prefix->blob prefix)))
 
 (define (bucket-split store prefix)
-  ;; (printf "bucket-split: ~S ~S ~S~n" txn dbi prefix)
+  ;; (printf "bucket-split: ~S ~S~n" store prefix)
   (let ((upper (bitstring-append prefix (list->bitstring '(1))))
         (lower (bitstring-append prefix (list->bitstring '(0)))))
     (lazy-each (lambda (node)
@@ -413,7 +428,7 @@
      ;; if no bucket found, insert node into new bucket
      ((not prefix)
       (bucket-insert store
-                     (bitstring-take id 1)
+                     (bitstring-take (blob->bitstring id) 1)
                      (make-node id: id
                                 ip: ip
                                 port: port
@@ -430,7 +445,7 @@
      ;; if bucket is full, split and try again or discard new ndoe
      ((>= (bucket-size store prefix) (max-bucket-size))
       ;; can bucket be split?
-      (when (bitstring-prefix? prefix (local-id store))
+      (when (bitstring-prefix? prefix (blob->bitstring (local-id store)))
         (bucket-split store prefix)
         (update-routing-table store id ip port)))
      ;; bucket has space, insert new node
@@ -483,30 +498,77 @@
   (alist-match
    params
    ((key)
-    (with-store env
-                (lambda (store)
-                  (if (string? key)
-                      `((tid . ,tid)
-                        (type . "r")
-                        (data . ,(blob->string
-                                  (mdb-get (store-txn store)
-                                           (store-data store)
-                                           (string->blob key)))))
-                      `((tid . ,tid)
-                        (type . "e")
-                        (code . 400)
-                        (desc . "Invalid FIND_VALUE request"))))))
+    (with-store
+     env
+     (lambda (store)
+       (if (string? key)
+           `((tid . ,tid)
+             (type . "r")
+             (data . ,(blob->string
+                       (mdb-get (store-txn store)
+                                (store-data store)
+                                (string->blob key)))))
+           `((tid . ,tid)
+             (type . "e")
+             (code . 400)
+             (desc . "Invalid FIND_VALUE request"))))))
    (else
     `((tid . ,tid)
       (type . "e")
       (code . 400)
       (desc . "Invalid FIND_VALUE request")))))
 
+(define (prev-closest-bucket prefix)
+  (and (> (bitstring-length prefix) 0)
+       (bitstring-drop-right prefix 1)))
+
+(define (invert-last-bit b)
+  (let ((prefix (bitstring-append (bitstring-drop-right b 1))))
+    (if (bitstring-bit-set? b (- (bitstring-length b) 1))
+        (bitconstruct (prefix bitstring) (0 1))
+        (bitconstruct (prefix bitstring) (1 1)))))
+  
+;; where k = max-bucket-size, according to kademlia paper
+(define (k-closest-nodes store id)
+  (let ((closest-bucket (find-bucket-for-id store id)))
+    (let loop ((nodes '())
+               (next-bucket closest-bucket))
+      (if (< (length nodes) (max-bucket-size))
+          (if next-bucket
+              (loop (append nodes (lazy-seq->list (bucket-nodes store next-bucket)))
+                    (prev-closest-bucket next-bucket))
+              ;; try inverting the last bit of the closest bucket to get the last few nodes
+              (let ((alt-bucket (invert-last-bit closest-bucket)))
+                (append nodes (lazy-seq->list (bucket-nodes store alt-bucket)))))
+          nodes))))
+
+(define (receive-find-node env tid params from-host from-port)
+  (alist-match
+   params
+   ((id)
+    (with-store
+     env
+     (lambda (store)
+       `((tid . ,tid)
+         (type . "r")
+         (data . ,(list->vector
+                   (map (lambda (node)
+                          (vector (blob->string (node-id node))
+                                  (node-ip node)
+                                  (node-port node)))
+                        (k-closest-nodes store (string->blob id)))))))))
+   (else
+    `((tid . ,tid)
+      (type . "e")
+      (code . 400)
+      (desc . "Invaliid FIND_NODE request")))))
+
 (define rpc-handlers
   (alist->hash-table
    `(("PING" . ,receive-ping)
      ("STORE" . ,receive-store)
-     ("FIND_VALUE" . ,receive-find-value))
+     ("FIND_VALUE" . ,receive-find-value)
+     ("FIND_NODE" . ,receive-find-node))
    string=?
    string-hash))
 
@@ -540,12 +602,19 @@
   (gochan-select
    ((inbox -> msg)
     (match-let (((data from-host from-port) msg))
+      (log-for (debug kademlia)
+               (sprintf "received from ~A:~A ~S" from-host from-port data))
       (alist-match data
        (((type . "q") tid method)
         (let ((params (alist-ref 'params data))
               (handler (hash-table-ref/default rpc-handlers method #f)))
           (if handler
               (let ((data (handler env tid params from-host from-port)))
+                (log-for (debug kademlia)
+                         (sprintf "sending to ~A:~A ~S"
+                                  from-host
+                                  from-port
+                                  data))
                 (condition-case
                     (udp-sendto socket
                                 from-host
@@ -609,14 +678,18 @@
   (thread-terminate! (rpc-manager-listener rpc-manager))
   (thread-terminate! (rpc-manager-dispatcher rpc-manager)))
 
-(define-record server env socket rpc-manager)
+
+(define-record server env socket rpc-manager events)
+
+(define-record-printer (server x out)
+  (fprintf out "#<server ~A>" (bin->hex (server-id x))))
 
 (define (server-start path host port)
   (let ((socket (udp-open-socket)))
     (udp-bind! socket host port)
     (let* ((env (kademlia-env-open path))
            (rpc-manager (rpc-manager-start env socket)))
-      (make-server env socket rpc-manager))))
+      (make-server env socket rpc-manager (gochan 0)))))
 
 (define (server-stop server)
   (rpc-manager-threads-terminate (server-rpc-manager server))
@@ -640,6 +713,58 @@
   ;; TODO: purge existing routing table, it is no longer valid!
   (with-store (server-env server)
               (cut local-id-set! <> id)))
+
+(define (server-add-node server id ip port)
+  (with-store (server-env server)
+              (cut update-routing-table <> id ip port)))
+
+(define (server-all-nodes server)
+  (with-store (server-env server)
+              (lambda (store)
+                (lazy-seq->list
+                 (lazy-map blob->node
+                           (all-values (store-txn store)
+                                       (store-routing-table store)))))))
+
+(define (server-has-node? server)
+  (with-store (server-env server)
+              (lambda (store)
+                (not (lazy-null?
+                      (all-values (store-txn store)
+                                  (store-routing-table store)))))))
+
+(define (join-network server)
+  (assert (server-has-node? server))
+  (log-for (debug kademlia) `("join-start" ,(server-id server)))
+  (find-node server (server-id server))
+  (log-for (debug kademlia) `("join-complete" ,(server-id server))))
+
+(define (distance a b)
+  (list->u8vector
+   (map (cut apply bitwise-xor <>)
+        (zip (u8vector->list (blob->u8vector/shared a))
+             (u8vector->list (blob->u8vector/shared b))))))
+
+(define (closest-node store id)
+  (let* ((bucket (find-bucket-for-id store id))
+         (nodes (bucket-nodes store bucket)))
+    (lazy-fold (lambda (x closest)
+                 (if (u8vector<? (distance x id) (distance closest id))
+                     x
+                     closest))
+               (lazy-head nodes)
+               (lazy-tail nodes))))
+
+(define (find-node server target-id)
+  (let ((node (with-store (server-env server)
+                          (lambda (store)
+                            (closest-node store target-id)))))
+    (if (blob=? (node-id node) target-id)
+        node
+        (send-find-node server
+                        (node-ip node)
+                        (node-port node)
+                        target-id))))
 
 (define (rpc-send server to-host to-port method params #!key (timeout 5000))
   (let* ((manager (server-rpc-manager server))
@@ -678,5 +803,13 @@
 
 (define (send-find-value server host port key)
   (rpc-send server host port "FIND_VALUE" `((key . ,key))))
+
+(define (send-find-node server host port id)
+  (map (lambda (row)
+         (list (string->blob (vector-ref row 0))
+               (vector-ref row 1)
+               (vector-ref row 2)))
+       (vector->list
+        (rpc-send server host port "FIND_NODE" `((id . ,(blob->string id)))))))
 
 )

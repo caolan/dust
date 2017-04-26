@@ -28,7 +28,25 @@
                      (bitstring-take b 3)))
     (test-assert
         (bitstring=? (list->bitstring '(1 1 0 1 0))
-                     (bitstring-take b 5)))))
+                     (bitstring-take b 5)))
+    (test-assert
+        (bitstring=? (list->bitstring '(1 1 0 1 0 0 1 0))
+                     (bitstring-take b 100)))))
+
+(test-group "bitstring-take-right"
+  (let ((b (list->bitstring '(1 1 0 1 0 0 1 0))))
+    (test-assert
+        (bitstring=? (list->bitstring '(0 0 1 0))
+                     (bitstring-take-right b 4)))
+    (test-assert
+        (bitstring=? (list->bitstring '(0 1 0))
+                     (bitstring-take-right b 3)))
+    (test-assert
+        (bitstring=? (list->bitstring '(1 0 0 1 0))
+                     (bitstring-take-right b 5)))
+    (test-assert
+        (bitstring=? (list->bitstring '(1 1 0 1 0 0 1 0))
+                     (bitstring-take-right b 100)))))
 
 (test-group "bitstring-drop"
   (let ((b (list->bitstring '(1 1 0 1 0 0 1 0))))
@@ -40,7 +58,25 @@
                      (bitstring-drop b 3)))
     (test-assert
         (bitstring=? (list->bitstring '(0 1 0))
-                     (bitstring-drop b 5)))))
+                     (bitstring-drop b 5)))
+    (test-assert
+        (bitstring=? (list->bitstring '())
+                     (bitstring-drop b 100)))))
+
+(test-group "bitstring-drop-right"
+  (let ((b (list->bitstring '(1 1 0 1 0 0 1 0))))
+    (test-assert
+        (bitstring=? (list->bitstring '(1 1 0 1))
+                     (bitstring-drop-right b 4)))
+    (test-assert
+        (bitstring=? (list->bitstring '(1 1 0 1 0))
+                     (bitstring-drop-right b 3)))
+    (test-assert
+        (bitstring=? (list->bitstring '(1 1 0))
+                     (bitstring-drop-right b 5)))
+    (test-assert
+        (bitstring=? (list->bitstring '())
+                     (bitstring-drop-right b 100)))))
 
 (test-group "bitstring-compare"
   (test 0 (bitstring-compare (list->bitstring '(1 0 1))

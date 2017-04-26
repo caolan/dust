@@ -6,7 +6,8 @@
  dup-values
  dup-count
  mdb-cursor-get/default
- keys)
+ keys
+ all-values)
 
 (import chicken scheme)
 (use lmdb-lolevel lazy-seq miscmacros)
@@ -70,6 +71,18 @@
                 #t)
             ((exn lmdb MDB_NOTFOUND) #f))
           (lazy-seq (cons (mdb-cursor-key cursor) (loop MDB_NEXT_NODUP)))
+          lazy-null))))
+
+;; includes all duplicates for all keys
+(define (all-values txn dbi)
+  (let ((cursor (mdb-cursor-open txn dbi)))
+    (let loop ((op MDB_FIRST))
+      (if (condition-case
+              (begin
+                (mdb-cursor-get cursor #f #f op)
+                #t)
+            ((exn lmdb MDB_NOTFOUND) #f))
+          (lazy-seq (cons (mdb-cursor-data cursor) (loop MDB_NEXT)))
           lazy-null))))
 
 )

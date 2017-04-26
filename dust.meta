@@ -12,6 +12,7 @@
         gochan
         socket
         udp6
+        log5scm
         endian-blob
         pathname-expand
         unix-sockets)

@@ -3,12 +3,18 @@
      bitstring
      dust.kademlia
      lmdb-lolevel
+     posix
+     extras
      files
      srfi-4
      lazy-seq
      sodium
+     gochan
+     log5scm
      matchable
+     miscmacros
      dust.lmdb-utils
+     dust.u8vector-utils
      dust.bitstring-utils)
 
 (define (clear-testdb #!optional (path "tests/testdb"))
@@ -786,6 +792,31 @@
                 (bucket-nodes store (list->bitstring '(1)))))
          )))))
 
+(test-group "distance"
+  (let ((id0 (bitstring->blob (list->bitstring (make-list 120 0))))
+        (id1 (let ((v (make-vector 120 0)))
+               (vector-set! v 119 1)
+               (bitstring->blob (list->bitstring (vector->list v)))))
+        (id2 (let ((v (make-vector 120 0)))
+               (vector-set! v 118 1)
+               (bitstring->blob (list->bitstring (vector->list v)))))
+        (id4 (let ((v (make-vector 120 0)))
+               (vector-set! v 117 1)
+               (bitstring->blob (list->bitstring (vector->list v)))))
+        (id5 (let ((v (make-vector 120 0)))
+               (vector-set! v 119 1)
+               (vector-set! v 117 1)
+               (bitstring->blob
+                (list->bitstring (vector->list v))))))
+    (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 3) (distance id1 id2))
+    (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 1) (distance id1 id0))
+    (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 4) (distance id4 id0))
+    (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0) (distance id5 id5))
+    (test-assert
+        (u8vector<?
+         (distance id4 id1)
+         (distance id4 #${ff00000000000000000000000000000000000000})))))
+
 (define (with-test-servers configs thunk #!optional (servers '()))
   (if (null? configs)
    (apply thunk (reverse servers))
@@ -825,6 +856,100 @@
      ;; (test "value-two" (find-value-rpc server1 "127.0.0.1" 4217 "key-two")))))
      (test "value-one" (send-find-value server2 "127.0.0.1" 4217 "key-one"))
      (test "value-two" (send-find-value server1 "127.0.0.1" 4218 "key-two")))))
+
+;; given the 8 bits of the first byte, make a full node id by
+;; repeating them
+(define (make-id . bits)
+  (assert (= 8 (length bits)))
+  (bitstring->blob (list->bitstring (join (make-list 20 bits)))))
+
+(test-group "FIND_NODE returns all nodes if < k available"
+  ;; (start-sender
+  ;;  catchall-sender
+  ;;  (port-sender (current-error-port))
+  ;;  (category (debug kademlia)))
+  (with-test-servers
+   `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
+     (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202))
+   (lambda (s1 s2)
+     (server-add-node s1 (make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
+     (server-add-node s1 (make-id 0 0 0 0 0 1 0 0) "127.0.0.1" 4203)
+     (server-add-node s1 (make-id 0 0 0 0 1 0 0 0) "127.0.0.1" 4204)
+     (server-add-node s1 (make-id 0 0 0 1 0 0 0 0) "127.0.0.1" 4205)
+     (server-add-node s1 (make-id 0 0 1 0 0 0 0 0) "127.0.0.1" 4206)
+     (server-add-node s1 (make-id 0 1 0 0 0 0 0 0) "127.0.0.1" 4207)
+     (server-add-node s1 (make-id 1 0 0 0 0 0 0 0) "127.0.0.1" 4208)
+     (test `((,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
+             (,(make-id 0 0 0 0 0 1 0 0) "127.0.0.1" 4203)
+             (,(make-id 0 0 0 0 1 0 0 0) "127.0.0.1" 4204)
+             (,(make-id 0 0 0 1 0 0 0 0) "127.0.0.1" 4205)
+             (,(make-id 0 0 1 0 0 0 0 0) "127.0.0.1" 4206)
+             (,(make-id 0 1 0 0 0 0 0 0) "127.0.0.1" 4207)
+             (,(make-id 1 0 0 0 0 0 0 0) "127.0.0.1" 4208))
+           (send-find-node s2 "127.0.0.1" 4201 (server-id s1))))))
+
+(define (format-nodes nodes)
+  (map (lambda (node)
+         (list (node-id node) (node-ip node) (node-port node)))
+       nodes))
+
+;; (test-group "join network"
+;;   (let ((log-channel (gochan 0)))
+;;     ;; intercept log messgages by logging to a zero buffer gochan in the
+;;     ;; hope it slows down logging threads on the events we want to run
+;;     ;; tests for
+;;     (start-sender
+;;      catchall-sender
+;;      (structured-sender (cut gochan-send log-channel <>))
+;;      (output (<structured))
+;;      (category *))
+    
+;;     (with-test-servers
+;;      `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
+;;        (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
+;;        (,(make-id 0 0 0 0 0 0 1 1) "127.0.0.1" 4203)
+;;        (,(make-id 0 0 0 0 0 1 0 0) "127.0.0.1" 4204))
+;;      (lambda (s1 s2 s3 s4)
+;;        (test-error "attempting join without knowing any nodes produces error"
+;;                    (join-network s1))
+;;        (let* ((completed '())
+;;               (t (go (let loop ()
+;;                        (gochan-select
+;;                         ((log-channel -> msg)
+;;                          (match msg
+;;                            (("join-complete" id)
+;;                             (unless (member id completed blob=?)
+;;                               (set! completed (cons id completed)))
+;;                             (cond
+;;                              ((blob=? (server-id s2) id)
+;;                               (test `((,(server-id s1) "127.0.0.1" 4201))
+;;                                     (format-nodes (server-all-nodes s2))))
+;;                              ((blob=? (server-id s3) id)
+;;                               (test `((,(server-id s1) "127.0.0.1" 4201)
+;;                                       (,(server-id s2) "127.0.0.1" 4202))
+;;                                     (format-nodes (server-all-nodes s3))))
+;;                              ((blob=? (server-id s4) id)
+;;                               (test `((,(server-id s1) "127.0.0.1" 4201)
+;;                                       (,(server-id s2) "127.0.0.1" 4202)
+;;                                       (,(server-id s3) "127.0.0.1" 4203))
+;;                                     (format-nodes (server-all-nodes s4))))))
+;;                            (else
+;;                             ;; ignore other messages
+;;                             #f))
+;;                          (loop)))))))
+;;          (server-add-node s2 (server-id s1) "127.0.0.1" 4201)
+;;          (server-add-node s3 (server-id s1) "127.0.0.1" 4201)
+;;          (server-add-node s4 (server-id s2) "127.0.0.1" 4202)
+;;          (thread-join! (go (join-network s2)) 4)
+;;          (thread-join! (go (join-network s3)) 4)
+;;          (thread-join! (go (join-network s4)) 4)
+;;          (thread-terminate! t)
+;;          (test 3 (length completed))
+;;          (test `((,(server-id s2) "127.0.0.1" 4202)
+;;                  (,(server-id s3) "127.0.0.1" 4203)
+;;                  (,(server-id s4) "127.0.0.1" 4204))
+;;                (format-nodes (server-all-nodes s1)))
+;;          )))))
 
 ;; TODO: create procedure to find new unbound port number have
 ;;       server-start acception port as optional - if defined bind
