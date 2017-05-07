@@ -7,6 +7,7 @@
         lazy-seq
         (sodium 0.3.0)
         matchable
+        bitstring
         srfi-117
         bencode
         gochan
