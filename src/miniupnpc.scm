@@ -8,7 +8,9 @@
  get-external-address
  add-any-port-mapping
  add-port-mapping
- get-specific-port-mapping-entry)
+ get-specific-port-mapping-entry
+ MINIUPNPC_VERSION
+ MINIUPNPC_API_VERSION)
 
 (import chicken scheme foreign)
 (use lolevel srfi-13 extras)
@@ -16,9 +18,19 @@
 (foreign-declare "#include <miniupnpc/miniupnpc.h>")
 (foreign-declare "#include <miniupnpc/upnpcommands.h>")
 
+(define MINIUPNPC_VERSION
+  (foreign-value "MINIUPNPC_VERSION" c-string))
 
-(define UPNP_LOCAL_PORT_ANY (foreign-value "UPNP_LOCAL_PORT_ANY" int))
-(define UPNP_LOCAL_PORT_SAME (foreign-value "UPNP_LOCAL_PORT_SAME" int))
+(define MINIUPNPC_API_VERSION
+  (foreign-value "MINIUPNPC_API_VERSION" int))
+
+(cond-expand
+  (miniupnpc-local-port-defines
+   (set! UPNP_LOCAL_PORT_ANY (foreign-value "UPNP_LOCAL_PORT_ANY" int))
+   (set! UPNP_LOCAL_PORT_SAME (foreign-value "UPNP_LOCAL_PORT_SAME" int)))
+  (else
+   (define UPNP_LOCAL_PORT_ANY 0)
+   (define UPNP_LOCAL_PORT_SAME 1)))
 
 (define UPNPCOMMAND_SUCCESS (foreign-value "UPNPCOMMAND_SUCCESS" int))
 
@@ -35,14 +47,24 @@
    (upnp-urls-pointer urls)))
 
 (define c_upnpDiscover
-  (foreign-lambda (c-pointer (struct UPNPDev)) "upnpDiscover"
-    int
-    c-string
-    c-string
-    int
-    int
-    int
-    (c-pointer int)))
+  (cond-expand
+    (miniupnpc-discover-ttl
+     (foreign-lambda (c-pointer (struct UPNPDev)) "upnpDiscover"
+       int
+       c-string
+       c-string
+       int
+       int
+       int
+       (c-pointer int)))
+    (else
+     (foreign-lambda (c-pointer (struct UPNPDev)) "upnpDiscover"
+       int
+       c-string
+       c-string
+       int
+       int
+       (c-pointer int)))))
 
 (define (upnp-discover #!key
                       (timeout 1000)
@@ -52,13 +74,23 @@
                       ipv6
                       (ttl 2))
   (let-location ((err int))
-    (let ((ptr (c_upnpDiscover timeout
-                               multicast-interface
-                               minissdpdsock
-                               local-port
-                               (if ipv6 1 0)
-                               ttl
-                               (location err))))
+    (let ((ptr
+           (cond-expand
+             (miniupnpc-discover-ttl
+              (c_upnpDiscover timeout
+                              multicast-interface
+                              minissdpdsock
+                              local-port
+                              (if ipv6 1 0)
+                              ttl
+                              (location err)))
+             (else
+              (c_upnpDiscover timeout
+                              multicast-interface
+                              minissdpdsock
+                              local-port
+                              (if ipv6 1 0)
+                              (location err))))))
       (if ptr
           (let ((devices (make-upnp-device-list ptr)))
             (set-finalizer! devices free-upnp-device-list!)

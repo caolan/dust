@@ -53,10 +53,16 @@
         (compile -O2 -d1 -inline -s "../src/kademlia.scm" -J
                  -o "dust.kademlia.so")
         (compile -O2 -d0 -s "dust.kademlia.import.scm"))
-       ("dust.miniupnpc.so" ("../src/miniupnpc.scm")
-        (compile -O2 -d1 -inline -s "../src/miniupnpc.scm" -lminiupnpc -J
-                 -o "dust.miniupnpc.so")
-        (compile -O2 -d0 -s "dust.miniupnpc.import.scm"))
+       ("miniupnpc-features" ("../src/detect-miniupnpc-features.scm")
+        (compile "../src/detect-miniupnpc-features.scm" -lminiupnpc
+                 -o "detect-miniupnpc-features")
+        (run ("./detect-miniupnpc-features")))
+       ("dust.miniupnpc.so" ("../src/miniupnpc.scm" "miniupnpc-features")
+        (let* ((features (with-input-from-file "miniupnpc-features" read))
+               (flags (intersperse features '-feature)))
+          (compile -O2 -d1 -inline -s "../src/miniupnpc.scm" -lminiupnpc
+                   ,@flags -J -o "dust.miniupnpc.so")
+          (compile -O2 -d0 -s "dust.miniupnpc.import.scm")))
        ("dust.server.so" ("../src/server.scm")
         (compile -O2 -d1 -inline -s "../src/server.scm" -J
                  -o "dust.server.so")
@@ -65,7 +71,8 @@
         (compile -O2 -d1 -inline -s "../src/client.scm" -J
                  -o "dust.client.so")
         (compile -O2 -d0 -s "dust.client.import.scm")))
-  '("dust.u8vector-utils.so"
+  '("miniupnpc-features"
+    "dust.u8vector-utils.so"
     "dust.alist-match.so"
     "dust.bitstring-utils.so"
     "dust.lazy-seq-utils.so"

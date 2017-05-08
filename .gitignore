@@ -6,5 +6,7 @@
 /tests/server-dbs
 /lib/*.so
 /lib/*.scm
+/lib/miniupnpc-features
+/lib/detect-miniupnpc-features
 /bin/dust
 /bin/dustd
