@@ -29,6 +29,37 @@ Then apply the patch from the ticket and, in the unix-sockets directly, do:
   chicken-install -s
 #+END_SRC
 
+*** OpenBSD
+On OpenBSD 6.1, I install these packages:
+
+#+BEGIN_SRC shell
+  doas pkg_add chicken sodium miniupnpc
+#+END_SRC
+
+Then install LMDB from source:
+
+#+BEGIN_SRC shell
+  git clone git://github.com/LMDB/lmdb
+  cd lmdb
+  git checkout LMDB_0.9.19
+  make
+  # "make install" doesn't work for me as the expected binaries don't all build
+  doas cp liblmdb.so /usr/local/lib/
+  doas cp liblmdb.a /usr/local/lib/
+  doas cp lmdb.h /usr/local/include/
+#+END_SRC
+
+Then build and install dust:
+
+#+BEGIN_SRC shell
+  cd dust
+  CPATH=/usr/local/include doas chicken-install
+#+END_SRC
+
+Note: LMDB has to be used in MDB_WRITEMAP mode on OpenBSD due to the
+lack of a unified buffer cache. LMDB environments will reserve their
+full mapsize instead of growing as entries are added.
+
 ** Run tests
 Install test dependencies.
 
