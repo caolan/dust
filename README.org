@@ -58,7 +58,8 @@ Then build and install dust:
 
 Note: LMDB has to be used in MDB_WRITEMAP mode on OpenBSD due to the
 lack of a unified buffer cache. LMDB environments will reserve their
-full mapsize instead of growing as entries are added.
+full mapsize instead of growing as entries are added and nested
+transactions will not be supported.
 
 ** Run tests
 Install test dependencies.

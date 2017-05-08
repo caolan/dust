@@ -94,6 +94,11 @@
      dust.alist-match
      dust.lmdb-utils)
 
+;; LMDB does not work RDONLY on OpenBSD and should be used in MDB_WRITEMAP mode
+(define openbsd (string=? (car (system-information)) "OpenBSD"))
+(define env-flags (if openbsd MDB_WRITEMAP 0))
+
+
 ;; logging category
 (define-category kademlia)
 (define-category debug)
@@ -164,7 +169,7 @@
   (let ((env (mdb-env-create)))
     (mdb-env-set-mapsize env 10000000)
     (mdb-env-set-maxdbs env 3)
-    (mdb-env-open env path MDB_NOSYNC
+    (mdb-env-open env path (bitwise-ior env-flags MDB_NOSYNC)
                   (bitwise-ior perm/irusr perm/iwusr perm/irgrp perm/iroth))
     env))
 
