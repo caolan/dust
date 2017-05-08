@@ -17,6 +17,7 @@
      dust.u8vector-utils
      dust.bitstring-utils)
 
+
 (define (clear-testdb #!optional (path "tests/testdb"))
   (when (file-exists? path)
     (delete-directory path #t))
