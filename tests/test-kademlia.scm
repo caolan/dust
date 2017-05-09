@@ -1,5 +1,6 @@
 (use test
      test-generative
+     data-generators
      bitstring
      dust.kademlia
      lmdb-lolevel
@@ -889,10 +890,95 @@
              (,(make-id 1 0 0 0 0 0 0 0) "127.0.0.1" 4208))
            (send-find-node s2 "127.0.0.1" 4201 (server-id s1))))))
 
+(define random-ip
+  (gen-transform
+   (lambda (lst)
+     (string-join (map number->string lst) "."))
+   (with-size 4 (gen-list-of (gen-uint8)))))
+
+(define (random-node)
+  (list (random-id) (<- random-ip) (<- (gen-uint16))))
+
+(test-group "insert some nodes"
+  (let ((nodes
+         '((#${31a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
+           (#${7310b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
+           (#${73dbdd7f56965843fe949bc7078315f4468cbc0d} "96.198.18.86" 35258)
+           (#${43febec5924b871470d9c7f6df0208f0bd6fb157} "54.169.223.59" 45950)
+           (#${436f521b9716392b8bffec75cf5a99f968dca503} "191.67.125.244" 11128)))
+        (target-id #${e9acd7e8509496bb47409bcec8ae83e5bd5363c8}))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201))
+     (lambda (server)
+       (for-each (lambda (node)
+                   (apply (cut server-add-node server <> <> <>) node))
+                 nodes)
+       (let ((server-node-ids (map node-id (server-all-nodes server))))
+         (test 5 (length server-node-ids))
+         (test-assert (every (cut member <> server-node-ids blob=?)
+                             (map car nodes))))))))
+
 (define (format-nodes nodes)
   (map (lambda (node)
          (list (node-id node) (node-ip node) (node-port node)))
        nodes))
+
+(test-group "get n closest nodes"
+  (let ((nodes
+         '((#${31a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
+           (#${7310b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
+           (#${73dbdd7f56965843fe949bc7078315f4468cbc0d} "96.198.18.86" 35258)
+           (#${43febec5924b871470d9c7f6df0208f0bd6fb157} "54.169.223.59" 45950)
+           (#${436f521b9716392b8bffec75cf5a99f968dca503} "191.67.125.244" 11128)))
+        (target-id #${e9acd7e8509496bb47409bcec8ae83e5bd5363c8}))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201))
+     (lambda (server)
+       (for-each (lambda (node)
+                   (apply (cut server-add-node server <> <> <>) node))
+                 nodes)
+       (parameterize
+           ((max-bucket-size 5))
+         (with-store
+          (server-env server)
+          (lambda (store)
+            (test (sort nodes
+                        (lambda (a b)
+                          (u8vector<?
+                           (distance (car a) target-id)
+                           (distance (car b) target-id))))
+                  (format-nodes
+                   (k-closest-nodes store target-id))))))))))
+
+(test-group "FIND_NODE returns k closest nodes across buckets"
+  (start-sender
+   catchall-sender
+   (port-sender (current-error-port))
+   (category (error)))
+
+  ;;;;;;;;;;;;;;;;;; TODO ;;;;;;;;;;;;;;;;;;;;;;;;
+  ;; TODO: increasing the with-size of nodes here will cause oversize
+  ;; UDP packets, causing truncated (and therefore invalid) bencode
+  ;; messages being sent!
+  
+  (test-generative
+      ((nodes (with-size 5 (gen-list-of random-node)))
+       (target-id random-id))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
+       (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202))
+     (lambda (s1 s2)
+       (for-each (cut apply (cut server-add-node s1 <> <> <>) <>)
+                 nodes)
+       (let ((nodes-by-distance
+              (sort nodes
+                    (lambda (a b)
+                      (u8vector<? (distance (car a) target-id)
+                                  (distance (car b) target-id))))))
+         (test (length nodes) (length (server-all-nodes s1)))
+         (test nodes-by-distance
+               ;(take nodes-by-distance 20)
+               (send-find-node s2 "127.0.0.1" 4201 target-id)))))))
 
 ;; (test-group "join network"
 ;;   (let ((log-channel (gochan 0)))

@@ -58,6 +58,7 @@
  server-start
  server-stop
  with-server
+ server-env
  server-id
  server-id-set!
  server-add-node
@@ -66,7 +67,8 @@
  server-events
  join-network
  distance
- closest-node)
+ closest-node
+ k-closest-nodes)
 
 (import chicken scheme foreign)
 
@@ -532,19 +534,49 @@
     (if (bitstring-bit-set? b (- (bitstring-length b) 1))
         (bitconstruct (prefix bitstring) (0 1))
         (bitconstruct (prefix bitstring) (1 1)))))
-  
+
+(define (take-closest nodes n target-id)
+  ;; (print "take-closest")
+  (take
+   (sort nodes
+         (lambda (a b)
+           (u8vector<? (distance (node-id a) target-id)
+                       (distance (node-id b) target-id))))
+   (min n (length nodes))))
+
 ;; where k = max-bucket-size, according to kademlia paper
 (define (k-closest-nodes store id)
+  ;; (print "k-closest-nodes")
   (let ((closest-bucket (find-bucket-for-id store id)))
+    ;; (printf "closest-bucket: ~S~n" closest-bucket)
     (let loop ((nodes '())
                (next-bucket closest-bucket))
+      ;; (printf "loop: ~S~n" next-bucket)
       (if (< (length nodes) (max-bucket-size))
           (if next-bucket
-              (loop (append nodes (lazy-seq->list (bucket-nodes store next-bucket)))
+              (loop (append nodes
+                            (take-closest
+                             (lazy-seq->list (bucket-nodes store next-bucket))
+                             (- (max-bucket-size) (length nodes))
+                             id))
                     (prev-closest-bucket next-bucket))
-              ;; try inverting the last bit of the closest bucket to get the last few nodes
-              (let ((alt-bucket (invert-last-bit closest-bucket)))
-                (append nodes (lazy-seq->list (bucket-nodes store alt-bucket)))))
+              ;; try inverting the last bit of the closest bucket to
+              ;; get the last few nodes if we still haven't hit
+              ;; max-bucket-size
+              (let ((alt-bucket
+                     (if closest-bucket
+                         (invert-last-bit closest-bucket)
+                         ;; if we don't have a closest bucket, check
+                         ;; the alternate top-level bucket
+                         (if (bitstring-bit-set? (blob->bitstring id) 0)
+                             (bitconstruct (0 1))
+                             (bitconstruct (1 1))))))
+                ;; (printf "alt-bucket: ~S~n" (bitstring->list alt-bucket))
+                (append nodes
+                        (take-closest
+                         (lazy-seq->list (bucket-nodes store alt-bucket))
+                         (- (max-bucket-size) (length nodes))
+                         id))))
           nodes))))
 
 (define (receive-find-node env tid params from-host from-port)
@@ -584,10 +616,12 @@
                  ((exn bencode) #f))))
       (if msg
           (gochan-send channel (list msg from-host from-port))
-          (fprintf (current-error-port)
-                   "Invalid incoming bencode message (from ~A:~A)~n"
-                   from-host
-                   from-port))))
+          (begin
+            (log-for (error kademlia)
+                     "Invalid incoming bencode message (from ~A:~A)~n"
+                     from-host
+                     from-port)
+            (log-for (debug kademlia) "~S" data)))))
   (rpc-listener socket channel))
 
 ;; TODO: validate that returned tid is from the same host:port that the original query was sent to!
@@ -597,7 +631,7 @@
         (begin
           (hash-table-delete! channels tid)
           (gochan-send channel data))
-        (fprintf (current-error-port)
+        (log-for (error kademlia)
                  "Missing transaction ID: ~A (from ~A:~A)~n"
                  (bin->hex (string->blob tid))
                  from-host
@@ -608,7 +642,7 @@
    ((inbox -> msg)
     (match-let (((data from-host from-port) msg))
       (log-for (debug kademlia)
-               (sprintf "received from ~A:~A ~S" from-host from-port data))
+               "received from ~A:~A ~S" from-host from-port data)
       (alist-match data
        (((type . "q") tid method)
         (let ((params (alist-ref 'params data))
@@ -616,20 +650,20 @@
           (if handler
               (let ((data (handler env tid params from-host from-port)))
                 (log-for (debug kademlia)
-                         (sprintf "sending to ~A:~A ~S"
-                                  from-host
-                                  from-port
-                                  data))
+                         "sending to ~A:~A ~S"
+                         from-host
+                         from-port
+                         data)
                 (condition-case
                     (udp-sendto socket
                                 from-host
                                 from-port
                                 (bencode->string data))
                   ((exn bencode)
-                   (fprintf (current-error-port)
+                   (log-for (error kademlia)
                             "Invalid bencode returned by '~A' method handler~n"
                             method))))
-              (fprintf (current-error-port)
+              (log-for (error kademlia)
                        "No handler for method '~A' (from ~A:~A)~n"
                        method
                        from-host
@@ -639,7 +673,7 @@
        (((type . "e") tid)
         (send-to-channel waiting tid data from-host from-port))
        (else
-        (fprintf (current-error-port)
+        (log-for (error kademlia)
                  "Invalid message format (from ~A:~A)~n"
                  from-host
                  from-port)))))
@@ -740,9 +774,9 @@
 
 (define (join-network server)
   (assert (server-has-node? server))
-  (log-for (debug kademlia) `("join-start" ,(server-id server)))
+  (log-for (debug kademlia) "~S" `("join-start" ,(server-id server)))
   (find-node server (server-id server))
-  (log-for (debug kademlia) `("join-complete" ,(server-id server))))
+  (log-for (debug kademlia) "~S" `("join-complete" ,(server-id server))))
 
 (define (distance a b)
   (list->u8vector
