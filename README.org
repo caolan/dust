@@ -18,7 +18,7 @@ Currently (until https://bugs.call-cc.org/ticket/1352 is resolved), a patched ve
   chicken-install -r unix-sockets
 #+END_SRC
 
-Then apply the patch from the ticket and, in the unix-sockets directly, do:
+Then apply the patch from the ticket and, in the unix-sockets directory, do:
 
 #+BEGIN_SRC shell
   chicken-install -s
