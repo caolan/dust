@@ -778,11 +778,32 @@
   (find-node server (server-id server))
   (log-for (debug kademlia) "~S" `("join-complete" ,(server-id server))))
 
+(define c-distance
+  (foreign-lambda* int
+      ((scheme-object a)
+       (scheme-object b)
+       (scheme-object result))
+    "C_i_check_bytevector(a);
+     C_i_check_bytevector(b);
+     C_i_check_bytevector(result);
+     if (C_header_size(a) != C_header_size(b) ||
+         C_header_size(a) != C_header_size(result)) {
+       C_return(1);
+     }
+     int len = C_header_size(a);
+     int i;
+     char *a_str = (char *)C_data_pointer(a);
+     char *b_str = (char *)C_data_pointer(b);
+     char *result_str = (char *)C_data_pointer(result);
+     for (i = 0; i < len; i++) {
+       result_str[i] = a_str[i] ^ b_str[i];
+     }
+     C_return(0);"))
+     
 (define (distance a b)
-  (list->u8vector
-   (map (cut apply bitwise-xor <>)
-        (zip (u8vector->list (blob->u8vector/shared a))
-             (u8vector->list (blob->u8vector/shared b))))))
+  (let ((result (make-blob (blob-size a))))
+    (assert (= 0 (c-distance a b result)))
+    (blob->u8vector result)))
 
 (define (closest-node store id)
   (let* ((bucket (find-bucket-for-id store id))
