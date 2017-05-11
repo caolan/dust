@@ -955,14 +955,9 @@
    catchall-sender
    (port-sender (current-error-port))
    (category (error)))
-
-  ;;;;;;;;;;;;;;;;;; TODO ;;;;;;;;;;;;;;;;;;;;;;;;
-  ;; TODO: increasing the with-size of nodes here will cause oversize
-  ;; UDP packets, causing truncated (and therefore invalid) bencode
-  ;; messages being sent!
   
   (test-generative
-      ((nodes (with-size 5 (gen-list-of random-node)))
+      ((nodes (with-size 100 (gen-list-of random-node)))
        (target-id random-id))
     (with-test-servers
      `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)

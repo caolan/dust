@@ -611,7 +611,7 @@
 
 ;; places incoming bencoded messages onto a channel
 (define (rpc-listener socket channel)
-  (receive (n data from-host from-port) (udp-recvfrom socket 556)
+  (receive (n data from-host from-port) (udp-recvfrom socket 1200)
     (let ((msg (condition-case (string->bencode data)
                  ((exn bencode) #f))))
       (if msg
