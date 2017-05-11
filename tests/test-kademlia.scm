@@ -923,7 +923,7 @@
          (list (node-id node) (node-ip node) (node-port node)))
        nodes))
 
-(test-group "get n closest nodes"
+(test-group "get k closest nodes"
   (let ((nodes
          '((#${31a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
            (#${7310b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
@@ -963,16 +963,23 @@
      `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
        (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202))
      (lambda (s1 s2)
-       (for-each (cut apply (cut server-add-node s1 <> <> <>) <>)
-                 nodes)
+       (for-each
+        (lambda (node)
+          (apply server-add-node (cons s1 node)))
+        nodes)
        (let ((nodes-by-distance
-              (sort nodes
+              (map (lambda (x)
+                     (list (node-id (cdr x))
+                           (node-ip (cdr x))
+                           (node-port (cdr x))))
+                   (sort
+                    (map (lambda (node)
+                           (cons (distance (node-id node) target-id)
+                                 node))
+                         (server-all-nodes s1))
                     (lambda (a b)
-                      (u8vector<? (distance (car a) target-id)
-                                  (distance (car b) target-id))))))
-         (test (length nodes) (length (server-all-nodes s1)))
-         (test nodes-by-distance
-               ;(take nodes-by-distance 20)
+                      (u8vector<? (car a) (car b)))))))
+         (test (take nodes-by-distance 20)
                (send-find-node s2 "127.0.0.1" 4201 target-id)))))))
 
 ;; (test-group "join network"

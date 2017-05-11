@@ -536,48 +536,51 @@
         (bitconstruct (prefix bitstring) (1 1)))))
 
 (define (take-closest nodes n target-id)
-  ;; (print "take-closest")
-  (take
-   (sort nodes
-         (lambda (a b)
-           (u8vector<? (distance (node-id a) target-id)
-                       (distance (node-id b) target-id))))
-   (min n (length nodes))))
+  ;; (printf "take-closest: ~S ~S~n" n target-id)
+  (map cdr
+       (take
+        (sort (map (lambda (node)
+                     (cons (distance (node-id node) target-id)
+                           node))
+                   nodes)
+              (lambda (a b) (u8vector<? (car a) (car b))))
+        (min n (length nodes)))))
 
-;; where k = max-bucket-size, according to kademlia paper
+(define (take-at-most lst max-length)
+  (cond ((= max-length 0) '())
+        ((null? lst) '())
+        (else
+         (cons (car lst)
+               (take-at-most (cdr lst) (- max-length 1))))))
+
+(define (insert-sorted-max lst less? item max-length)
+  ;; (printf "insert-sorted-max: ~S ~S ~S ~S~n" lst less? item max-length)
+  (cond ((= max-length 0) '())
+        ((null? lst) (list item))
+        ((less? item (car lst))
+         (cons item (take-at-most lst (- max-length 1))))
+        (else
+         (cons (car lst)
+               (insert-sorted-max (cdr lst)
+                                  less?
+                                  item
+                                  (- max-length 1))))))
+
 (define (k-closest-nodes store id)
-  ;; (print "k-closest-nodes")
-  (let ((closest-bucket (find-bucket-for-id store id)))
-    ;; (printf "closest-bucket: ~S~n" closest-bucket)
-    (let loop ((nodes '())
-               (next-bucket closest-bucket))
-      ;; (printf "loop: ~S~n" next-bucket)
-      (if (< (length nodes) (max-bucket-size))
-          (if next-bucket
-              (loop (append nodes
-                            (take-closest
-                             (lazy-seq->list (bucket-nodes store next-bucket))
-                             (- (max-bucket-size) (length nodes))
-                             id))
-                    (prev-closest-bucket next-bucket))
-              ;; try inverting the last bit of the closest bucket to
-              ;; get the last few nodes if we still haven't hit
-              ;; max-bucket-size
-              (let ((alt-bucket
-                     (if closest-bucket
-                         (invert-last-bit closest-bucket)
-                         ;; if we don't have a closest bucket, check
-                         ;; the alternate top-level bucket
-                         (if (bitstring-bit-set? (blob->bitstring id) 0)
-                             (bitconstruct (0 1))
-                             (bitconstruct (1 1))))))
-                ;; (printf "alt-bucket: ~S~n" (bitstring->list alt-bucket))
-                (append nodes
-                        (take-closest
-                         (lazy-seq->list (bucket-nodes store alt-bucket))
-                         (- (max-bucket-size) (length nodes))
-                         id))))
-          nodes))))
+   (map cdr
+        (lazy-fold
+         (lambda (node results)
+           ;; (printf "fold: ~S ~S~n" node results)
+           (insert-sorted-max
+            results
+            (lambda (a b)
+              (u8vector<? (car a) (car b)))
+            (cons (distance (node-id node) id) node)
+            (max-bucket-size)))
+         '()
+         (lazy-map blob->node
+                   (all-values (store-txn store)
+                               (store-routing-table store))))))
 
 (define (receive-find-node env tid params from-host from-port)
   (alist-match
