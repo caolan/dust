@@ -810,6 +810,14 @@
                (vector-set! v 157 1)
                (bitstring->blob
                 (list->bitstring (vector->list v))))))
+    (test "uses XOR"
+          '(1 0 1 1 1 0 0 1)
+          (bitstring->list
+           (blob->bitstring
+            (u8vector->blob
+             (distance
+              (bitstring->blob (list->bitstring '(1 0 0 1 0 0 1 1)))
+              (bitstring->blob (list->bitstring '(0 0 1 0 1 0 1 0))))))))
     (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3) (distance id1 id2))
     (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1) (distance id1 id0))
     (test #u8(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4) (distance id4 id0))
@@ -923,7 +931,7 @@
          (list (node-id node) (node-ip node) (node-port node)))
        nodes))
 
-(test-group "get k closest nodes"
+(test-group "get k closest nodes across buckets with == k nodes total"
   (let ((nodes
          '((#${31a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
            (#${7310b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
@@ -948,17 +956,156 @@
                            (distance (car a) target-id)
                            (distance (car b) target-id))))
                   (format-nodes
-                   (k-closest-nodes store target-id))))))))))
+                   (n-closest-nodes store
+                                    target-id
+                                    (max-bucket-size)))))))))))
 
-(test-group "FIND_NODE returns k closest nodes across buckets"
-  (start-sender
-   catchall-sender
-   (port-sender (current-error-port))
-   (category (error)))
-  
-  (test-generative
-      ((nodes (with-size 100 (gen-list-of random-node)))
-       (target-id random-id))
+(test-group "get k closest nodes across buckets with < k nodes total"
+  (let ((nodes
+         '((#${31a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
+           (#${7310b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
+           (#${73dbdd7f56965843fe949bc7078315f4468cbc0d} "96.198.18.86" 35258)
+           (#${43febec5924b871470d9c7f6df0208f0bd6fb157} "54.169.223.59" 45950)
+           (#${436f521b9716392b8bffec75cf5a99f968dca503} "191.67.125.244" 11128)))
+        (target-id #${e9acd7e8509496bb47409bcec8ae83e5bd5363c8}))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201))
+     (lambda (server)
+       (for-each (lambda (node)
+                   (apply (cut server-add-node server <> <> <>) node))
+                 nodes)
+       (parameterize
+           ((max-bucket-size 20))
+         (with-store
+          (server-env server)
+          (lambda (store)
+            (test (sort nodes
+                        (lambda (a b)
+                          (u8vector<?
+                           (distance (car a) target-id)
+                           (distance (car b) target-id))))
+                  (format-nodes
+                   (n-closest-nodes store
+                                    target-id
+                                    (max-bucket-size)))))))))))
+
+(test-group "get k closest nodes across buckets with > k nodes total"
+  (let ((nodes
+         ;; anything > ${80...} starts with 1 bit
+         ;; anything < ${80...} and > ${40...} starts with 01 bits
+         ;; anything < ${40...} starts with 00 bits
+         
+         ;; each of these prefixes should have < k nodes to ensure the
+         ;; test runs with nodes in 00, 01, and 1 buckets and requires
+         ;; accessing at least two buckets. there should be > k nodes
+         ;; total < ${80...} to ensure split of 00 and 01 buckets.
+         '(
+           ;; 00 bucket
+           (#${00a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
+           (#${0010b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
+           (#${00dbdd7f56965843fe949bc7078315f4468cbc0d} "96.198.18.86" 35258)
+           (#${00febec5924b871470d9c7f6df0208f0bd6fb157} "54.169.223.59" 45950)
+           (#${006f521b9716392b8bffec75cf5a99f968dca503} "191.67.125.244" 11128)
+           (#${00914fe632ac5a91a208d9ec45e535a6dc6778e3} "237.77.12.79" 37926)
+           (#${002a811cb441fd8e8fe77c2e4845f4497a7a429b} "33.140.39.223" 14902)
+           (#${007532eac08a224313a370b30bffdcc0bd523240} "160.69.251.22" 55563)
+           (#${0048d27ba00c0cae4f66929337c68b35b4414a43} "9.201.11.121" 4570)
+           (#${0026bd09c75ee639964fdceb978244167bc2ec47} "39.251.134.81" 10873)
+           (#${0029b42199e78f64e9b4bcde01ada616508181d7} "136.255.159.33" 27258)
+           (#${0003bddd8861dbfa65d9125c87938aaeb4328bf3} "103.14.184.116" 24287)
+
+           ;; 01 bucket
+           (#${50fcdf2938e5513296b964e9a9c05d95778b2bea} "76.149.235.115" 29976)
+           (#${50f409d151e77dca0158f4eddd33295a76f04a76} "37.19.186.33" 10960)
+           (#${5005aee0356992f271472a7d3f888940f16ef057} "147.42.244.158" 42006)
+           (#${5090feaeae86ba817323fb47c949ecec6c60fc19} "6.198.159.141" 6195)
+           (#${50841b18fc1de328b2152935ec87c24b627da081} "201.21.23.104" 14081)
+           (#${506ba8edd6ee48be1f11c9f1b1a8f360955c4576} "130.208.69.58" 17565)
+           (#${508465755e8e4d68f3e6dcc5c170cbf928d529d3} "164.134.218.144" 64053)
+           (#${5071e12078020178a9d92579c030282f8c35f1b4} "79.182.14.9" 55120)
+           (#${506d238729fbbab7a953b7a3c9c13d1f88291483} "56.157.1.45" 15328)
+           (#${50ecb51e360d2d3d4b41cb6e451f24a6f382a453} "166.51.2.69" 49359)
+           (#${500744ad48364276a2f1c002c59a9f5020fa5486} "26.15.214.50" 30671)
+           (#${50e042e4e39a15fc5135dc25840e25f8a37b3f74} "13.180.72.83" 61229)
+           (#${50aee946f8b3a1443a3be6917b03ea26ab695b06} "140.248.118.103" 34982)
+
+           ;; 0 bucket
+           (#${ff791cdcf7340cc24604172627746ba5618bd88a} "112.182.62.126" 49294)
+           (#${ff1540c8e1fbd756f18ce34ee7ece058cbcd73e3} "22.183.93.23" 58566)
+           (#${ffb7e589c77df16bf651adfd45a56f7b35cdccef} "153.190.24.155" 862)
+           (#${ffbe31cf87f792043211e932e592cf8ad40b7ae3} "217.182.18.175" 59509)
+           (#${ff210ac93d462c59ce609aa216b79e99702146a4} "138.189.157.210" 4348)
+           ))
+        (target-id #${3a0a47cae824ecc72dbc22d218a2b6b73ddf8356}))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201))
+     (lambda (server)
+       (for-each (lambda (node)
+                   (apply (cut server-add-node server <> <> <>) node))
+                 nodes)
+       (parameterize
+           ((max-bucket-size 20))
+         (with-store
+          (server-env server)
+          (lambda (store)
+            (test (take
+                   (sort nodes
+                         (lambda (a b)
+                           (u8vector<?
+                            (distance (car a) target-id)
+                            (distance (car b) target-id))))
+                   20)
+                  (format-nodes
+                   (n-closest-nodes store
+                                    target-id
+                                    (max-bucket-size)))))))))))
+
+(test-group "get k closest nodes with zero nodes available"
+  (let ((target-id #${e9acd7e8509496bb47409bcec8ae83e5bd5363c8}))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201))
+     (lambda (server)
+       (with-store
+        (server-env server)
+        (lambda (store)
+          (test '()
+                (format-nodes
+                 (n-closest-nodes store
+                                  target-id
+                                  (max-bucket-size))))))))))
+
+(test-group "get k closest nodes from single bucket"
+  (let ((nodes
+         '((#${00a64cbc4c8bd1873384b73a6227bec1af8affbe} "244.16.185.97" 8944)
+           (#${0010b57e44e50d4b723a781db37687cf8c5acdad} "117.4.153.3" 26269)
+           (#${00dbdd7f56965843fe949bc7078315f4468cbc0d} "96.198.18.86" 35258)
+           (#${00febec5924b871470d9c7f6df0208f0bd6fb157} "54.169.223.59" 45950)
+           (#${006f521b9716392b8bffec75cf5a99f968dca503} "191.67.125.244" 11128)))
+        (target-id #${00acd7e8509496bb47409bcec8ae83e5bd5363c8}))
+    (with-test-servers
+     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201))
+     (lambda (server)
+       (for-each (lambda (node)
+                   (apply (cut server-add-node server <> <> <>) node))
+                 nodes)
+       (parameterize
+           ((max-bucket-size 5))
+         (with-store
+          (server-env server)
+          (lambda (store)
+            (test (sort nodes
+                        (lambda (a b)
+                          (u8vector<?
+                           (distance (car a) target-id)
+                           (distance (car b) target-id))))
+                  (format-nodes
+                   (n-closest-nodes store
+                                    target-id
+                                    (max-bucket-size)))))))))))
+
+(test-group "FIND_NODE returns k closest nodes"
+  (let ((nodes (<- (with-size 200 (gen-list-of random-node))))
+        (target-id (random-id)))
     (with-test-servers
      `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
        (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202))
@@ -982,63 +1129,41 @@
          (test (take nodes-by-distance 20)
                (send-find-node s2 "127.0.0.1" 4201 target-id)))))))
 
-;; (test-group "join network"
-;;   (let ((log-channel (gochan 0)))
-;;     ;; intercept log messgages by logging to a zero buffer gochan in the
-;;     ;; hope it slows down logging threads on the events we want to run
-;;     ;; tests for
-;;     (start-sender
-;;      catchall-sender
-;;      (structured-sender (cut gochan-send log-channel <>))
-;;      (output (<structured))
-;;      (category *))
-    
-;;     (with-test-servers
-;;      `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
-;;        (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
-;;        (,(make-id 0 0 0 0 0 0 1 1) "127.0.0.1" 4203)
-;;        (,(make-id 0 0 0 0 0 1 0 0) "127.0.0.1" 4204))
-;;      (lambda (s1 s2 s3 s4)
-;;        (test-error "attempting join without knowing any nodes produces error"
-;;                    (join-network s1))
-;;        (let* ((completed '())
-;;               (t (go (let loop ()
-;;                        (gochan-select
-;;                         ((log-channel -> msg)
-;;                          (match msg
-;;                            (("join-complete" id)
-;;                             (unless (member id completed blob=?)
-;;                               (set! completed (cons id completed)))
-;;                             (cond
-;;                              ((blob=? (server-id s2) id)
-;;                               (test `((,(server-id s1) "127.0.0.1" 4201))
-;;                                     (format-nodes (server-all-nodes s2))))
-;;                              ((blob=? (server-id s3) id)
-;;                               (test `((,(server-id s1) "127.0.0.1" 4201)
-;;                                       (,(server-id s2) "127.0.0.1" 4202))
-;;                                     (format-nodes (server-all-nodes s3))))
-;;                              ((blob=? (server-id s4) id)
-;;                               (test `((,(server-id s1) "127.0.0.1" 4201)
-;;                                       (,(server-id s2) "127.0.0.1" 4202)
-;;                                       (,(server-id s3) "127.0.0.1" 4203))
-;;                                     (format-nodes (server-all-nodes s4))))))
-;;                            (else
-;;                             ;; ignore other messages
-;;                             #f))
-;;                          (loop)))))))
-;;          (server-add-node s2 (server-id s1) "127.0.0.1" 4201)
-;;          (server-add-node s3 (server-id s1) "127.0.0.1" 4201)
-;;          (server-add-node s4 (server-id s2) "127.0.0.1" 4202)
-;;          (thread-join! (go (join-network s2)) 4)
-;;          (thread-join! (go (join-network s3)) 4)
-;;          (thread-join! (go (join-network s4)) 4)
-;;          (thread-terminate! t)
-;;          (test 3 (length completed))
-;;          (test `((,(server-id s2) "127.0.0.1" 4202)
-;;                  (,(server-id s3) "127.0.0.1" 4203)
-;;                  (,(server-id s4) "127.0.0.1" 4204))
-;;                (format-nodes (server-all-nodes s1)))
-;;          )))))
+(test-group "using multiple FIND_NODE hops to find a target node"
+  ;; a sender that matches any category
+  ;; (start-sender catchall-sender
+  ;;               (port-sender (current-output-port))
+  ;;               (category *))
+
+  (with-test-servers
+   `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
+     (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
+     (,(make-id 0 0 0 0 0 1 0 0) "127.0.0.1" 4203)
+     (,(make-id 0 0 0 0 1 0 0 0) "127.0.0.1" 4204)
+     (,(make-id 0 0 0 1 0 0 0 0) "127.0.0.1" 4205)
+     (,(make-id 0 0 1 0 0 0 0 0) "127.0.0.1" 4206)
+     (,(make-id 0 1 0 0 0 0 0 0) "127.0.0.1" 4207)
+     (,(make-id 1 0 0 0 0 0 0 0) "127.0.0.1" 4208))
+   (lambda (s1 s2 s3 s4 s5 s6 s7 s8)
+     ;; manually link the network instead of doing a join
+     (server-add-node s1 (server-id s2) "127.0.0.1" 4202)
+     (server-add-node s2 (server-id s3) "127.0.0.1" 4203)
+     (server-add-node s2 (server-id s4) "127.0.0.1" 4204)
+     (server-add-node s2 (server-id s5) "127.0.0.1" 4205)
+     (server-add-node s3 (server-id s4) "127.0.0.1" 4204)
+     (server-add-node s4 (server-id s5) "127.0.0.1" 4205)
+     (server-add-node s5 (server-id s6) "127.0.0.1" 4206)
+     (server-add-node s6 (server-id s7) "127.0.0.1" 4207)
+     (server-add-node s7 (server-id s8) "127.0.0.1" 4208)
+     (let ((results
+            (server-find-node s1 #${80acd7e8509496bb47409bcec8ae83e5bd5363c8})))
+       (test (server-id s8) (node-id (car results)))
+       (test "127.0.0.1" (node-ip (car results)))
+       (test 4208 (node-port (car results)))))))
+
+;; TODO: create network of multiple nodes and try finding specific node making multiple hops
+;; TODO: create netowork of multiple nodes and try store/find_value calls across network
+;; join mechanism is implicit in the above tests
 
 ;; TODO: create procedure to find new unbound port number have
 ;;       server-start acception port as optional - if defined bind

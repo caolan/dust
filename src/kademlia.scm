@@ -33,6 +33,7 @@
  prefix-blob-compare
  node-blob-compare
  max-bucket-size
+ concurrency
  bucket-nodes
  bucket-insert
  bucket-remove
@@ -65,10 +66,10 @@
  server-all-nodes
  server-has-node?
  server-events
- join-network
+ ;; join-network
  distance
- closest-node
- k-closest-nodes)
+ n-closest-nodes
+ server-find-node)
 
 (import chicken scheme foreign)
 
@@ -110,6 +111,7 @@
 (foreign-declare "#include <stdint.h>")
 
 (define max-bucket-size (make-parameter 20))
+(define concurrency (make-parameter 3))
 
 (defstruct node
   id
@@ -566,7 +568,7 @@
                                   item
                                   (- max-length 1))))))
 
-(define (k-closest-nodes store id)
+(define (n-closest-nodes store id n)
    (map cdr
         (lazy-fold
          (lambda (node results)
@@ -576,7 +578,7 @@
             (lambda (a b)
               (u8vector<? (car a) (car b)))
             (cons (distance (node-id node) id) node)
-            (max-bucket-size)))
+            n))
          '()
          (lazy-map blob->node
                    (all-values (store-txn store)
@@ -596,7 +598,9 @@
                           (vector (blob->string (node-id node))
                                   (node-ip node)
                                   (node-port node)))
-                        (k-closest-nodes store (string->blob id)))))))))
+                        (n-closest-nodes store
+                                         (string->blob id)
+                                         (max-bucket-size)))))))))
    (else
     `((tid . ,tid)
       (type . "e")
@@ -644,42 +648,47 @@
   (gochan-select
    ((inbox -> msg)
     (match-let (((data from-host from-port) msg))
-      (log-for (debug kademlia)
-               "received from ~A:~A ~S" from-host from-port data)
       (alist-match data
-       (((type . "q") tid method)
-        (let ((params (alist-ref 'params data))
-              (handler (hash-table-ref/default rpc-handlers method #f)))
-          (if handler
-              (let ((data (handler env tid params from-host from-port)))
-                (log-for (debug kademlia)
-                         "sending to ~A:~A ~S"
-                         from-host
-                         from-port
-                         data)
-                (condition-case
-                    (udp-sendto socket
-                                from-host
-                                from-port
-                                (bencode->string data))
-                  ((exn bencode)
-                   (log-for (error kademlia)
-                            "Invalid bencode returned by '~A' method handler~n"
-                            method))))
-              (log-for (error kademlia)
-                       "No handler for method '~A' (from ~A:~A)~n"
-                       method
-                       from-host
-                       from-port))))
-       (((type . "r") tid)
-        (send-to-channel waiting tid data from-host from-port))
-       (((type . "e") tid)
-        (send-to-channel waiting tid data from-host from-port))
-       (else
-        (log-for (error kademlia)
-                 "Invalid message format (from ~A:~A)~n"
-                 from-host
-                 from-port)))))
+        (((type . "q") tid method)
+         (log-for (debug kademlia)
+                  "~A ~A:~A ~A"
+                  (with-store env local-id)
+                  from-host
+                  from-port
+                  method)
+         (let ((params (alist-ref 'params data))
+               (handler (hash-table-ref/default rpc-handlers method #f)))
+           (if handler
+               (let ((data (handler env tid params from-host from-port)))
+                 ;; (log-for (debug kademlia)
+                 ;;          "~A =(~A:~A)=>~n~S"
+                 ;;          (with-store env local-id)
+                 ;;          from-host
+                 ;;          from-port
+                 ;;          data)
+                 (condition-case
+                     (udp-sendto socket
+                                 from-host
+                                 from-port
+                                 (bencode->string data))
+                   ((exn bencode)
+                    (log-for (error kademlia)
+                             "Invalid bencode returned by '~A' method handler~n"
+                             method))))
+               (log-for (error kademlia)
+                        "No handler for method '~A' (from ~A:~A)~n"
+                        method
+                        from-host
+                        from-port))))
+        (((type . "r") tid)
+         (send-to-channel waiting tid data from-host from-port))
+        (((type . "e") tid)
+         (send-to-channel waiting tid data from-host from-port))
+        (else
+         (log-for (error kademlia)
+                  "Invalid message format (from ~A:~A)~n"
+                  from-host
+                  from-port)))))
    ((outbox -> msg)
     (match-let (((data to-host to-port channel) msg))
       (alist-match
@@ -775,11 +784,11 @@
                       (all-values (store-txn store)
                                   (store-routing-table store)))))))
 
-(define (join-network server)
-  (assert (server-has-node? server))
-  (log-for (debug kademlia) "~S" `("join-start" ,(server-id server)))
-  (find-node server (server-id server))
-  (log-for (debug kademlia) "~S" `("join-complete" ,(server-id server))))
+;; (define (join-network server)
+;;   (assert (server-has-node? server))
+;;   (log-for (debug kademlia) "~S" `("join-start" ,(server-id server)))
+;;   (find-node server (server-id server))
+;;   (log-for (debug kademlia) "~S" `("join-complete" ,(server-id server))))
 
 (define c-distance
   (foreign-lambda* int
@@ -807,27 +816,6 @@
   (let ((result (make-blob (blob-size a))))
     (assert (= 0 (c-distance a b result)))
     (blob->u8vector result)))
-
-(define (closest-node store id)
-  (let* ((bucket (find-bucket-for-id store id))
-         (nodes (bucket-nodes store bucket)))
-    (lazy-fold (lambda (x closest)
-                 (if (u8vector<? (distance x id) (distance closest id))
-                     x
-                     closest))
-               (lazy-head nodes)
-               (lazy-tail nodes))))
-
-(define (find-node server target-id)
-  (let ((node (with-store (server-env server)
-                          (lambda (store)
-                            (closest-node store target-id)))))
-    (if (blob=? (node-id node) target-id)
-        node
-        (send-find-node server
-                        (node-ip node)
-                        (node-port node)
-                        target-id))))
 
 (define (rpc-send server to-host to-port method params #!key (timeout 5000))
   (let* ((manager (server-rpc-manager server))
@@ -875,4 +863,74 @@
        (vector->list
         (rpc-send server host port "FIND_NODE" `((id . ,(blob->string id)))))))
 
+(define (server-find-node server target-id)
+  (assert (server-has-node? server))
+  (let ((results (gochan 0)))
+    (let loop ((k-closest (with-store (server-env server)
+                                      (lambda (store)
+                                        (n-closest-nodes store
+                                                         target-id
+                                                         (max-bucket-size)))))
+               (concurrency (concurrency))
+               (running 0)
+               (ignored '()))
+      (cond
+       ;; if we've not hit full concurrency and there are non-ignored
+       ;; nodes remaining
+       ((and (< running concurrency)
+             (find (lambda (node) (not (member node ignored)))
+                   k-closest)) =>
+        (lambda (node)
+          ;; make async request to closest (non-ignored) node form
+          ;; k-closest list
+          (thread-start!
+           (lambda ()
+             (gochan-send
+              results
+              (send-find-node server
+                              (node-ip node)
+                              (node-port node)
+                              (node-id node)))))
+          (loop k-closest
+                concurrency
+                (+ running 1)
+                (cons node ignored))))
+       ;; no more requests to make, and all running requests finished
+       ((= running 0) k-closest)
+       (else
+        ;; wait for result
+        (gochan-select
+         ((results -> nodes)
+          (log-for (debug kademlia)
+                   "~A got nodes: ~S"
+                   (with-store (server-env server) local-id)
+                   nodes)
+          ;; add nodes to routing table
+          (let ((local-id (server-id server)))
+            (for-each
+             (lambda (node)
+               (unless (blob=? local-id (car node))
+                 (apply server-add-node (cons server node))))
+             nodes))
+          ;; recalculate k-closest list
+          (let ((k-closest2
+                 (with-store (server-env server)
+                             (lambda (store)
+                               (n-closest-nodes store
+                                                target-id
+                                                (max-bucket-size))))))
+            ;; check if distance to target is reducing
+            (if (u8vector<? (distance (node-id (car k-closest2)) target-id)
+                            (distance (node-id (car k-closest)) target-id))
+                (loop k-closest2
+                      concurrency
+                      (- running 1)
+                      ignored)
+                ;; if the distance didn't reduce, increase concurrency
+                ;; to max-bucket-size (k)
+                (loop k-closest2
+                      (max-bucket-size)
+                      (- running 1)
+                      ignored))))))))))
+          
 )
