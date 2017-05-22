@@ -66,7 +66,7 @@
  server-all-nodes
  server-has-node?
  server-events
- ;; join-network
+ server-join-network
  distance
  n-closest-nodes
  server-find-node)
@@ -184,7 +184,7 @@
               (data-open txn)))
 
 (define (with-store env thunk)
-  (with-transaction env (compose thunk store-open)))
+  (with-write-transaction env (compose thunk store-open)))
 
 (define (prefix->blob prefix)
   (bitstring->blob
@@ -649,13 +649,19 @@
    ((inbox -> msg)
     (match-let (((data from-host from-port) msg))
       (alist-match data
-        (((type . "q") tid method)
+        (((type . "q") tid sid method)
          (log-for (debug kademlia)
                   "~A ~A:~A ~A"
                   (with-store env local-id)
                   from-host
                   from-port
                   method)
+         (with-store env (lambda (store)
+                           (update-routing-table
+                            store
+                            (string->blob sid)
+                            from-host
+                            from-port)))
          (let ((params (alist-ref 'params data))
                (handler (hash-table-ref/default rpc-handlers method #f)))
            (if handler
@@ -784,12 +790,6 @@
                       (all-values (store-txn store)
                                   (store-routing-table store)))))))
 
-;; (define (join-network server)
-;;   (assert (server-has-node? server))
-;;   (log-for (debug kademlia) "~S" `("join-start" ,(server-id server)))
-;;   (find-node server (server-id server))
-;;   (log-for (debug kademlia) "~S" `("join-complete" ,(server-id server))))
-
 (define c-distance
   (foreign-lambda* int
       ((scheme-object a)
@@ -822,6 +822,7 @@
          (tid (blob->string (random-id)))
          (response (gochan 0))
          (msg (append `((tid . ,tid)
+                        (sid . ,(blob->string (server-id server)))
                         (type . "q")
                         (method . ,method))
                       (if params `((params . ,params)) '()))))
@@ -933,4 +934,8 @@
                       (- running 1)
                       ignored))))))))))
           
+(define (server-join-network server)
+  (assert (server-has-node? server))
+  (server-find-node server (server-id server)))
+
 )

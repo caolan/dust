@@ -1130,11 +1130,6 @@
                (send-find-node s2 "127.0.0.1" 4201 target-id)))))))
 
 (test-group "using multiple FIND_NODE hops to find a target node"
-  ;; a sender that matches any category
-  ;; (start-sender catchall-sender
-  ;;               (port-sender (current-output-port))
-  ;;               (category *))
-
   (with-test-servers
    `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
      (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
@@ -1160,6 +1155,35 @@
        (test (server-id s8) (node-id (car results)))
        (test "127.0.0.1" (node-ip (car results)))
        (test 4208 (node-port (car results)))))))
+
+(test-group "network of < k nodes, each should have total knowledge of network"
+  (let ((test-servers `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
+                        (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202)
+                        (,(make-id 0 0 0 0 0 1 0 0) "127.0.0.1" 4203)
+                        (,(make-id 0 0 0 0 1 0 0 0) "127.0.0.1" 4204)
+                        (,(make-id 0 0 0 1 0 0 0 0) "127.0.0.1" 4205)
+                        (,(make-id 0 0 1 0 0 0 0 0) "127.0.0.1" 4206)
+                        (,(make-id 0 1 0 0 0 0 0 0) "127.0.0.1" 4207)
+                        (,(make-id 1 0 0 0 0 0 0 0) "127.0.0.1" 4208))))
+    (with-test-servers
+     test-servers
+     (lambda servers
+       (for-each (lambda (s)
+                   ;; each node needs to know of at least one other
+                   (apply server-add-node (cons s (car test-servers)))
+                   (server-join-network s))
+                 (cdr servers))
+       (for-each (lambda (s)
+                   (test (sprintf "routing table for ~A" (server-id s))
+                         (filter (lambda (x)
+                                   (not (blob=? (car x) (server-id s))))
+                                 test-servers)
+                         (map (lambda (node)
+                                (list (node-id node)
+                                      (node-ip node)
+                                      (node-port node)))
+                              (server-all-nodes s))))
+                 servers)))))
 
 ;; TODO: create network of multiple nodes and try finding specific node making multiple hops
 ;; TODO: create netowork of multiple nodes and try store/find_value calls across network
