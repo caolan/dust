@@ -1,7 +1,9 @@
 (module dust.lmdb-utils
 
 ;;;;; Exports ;;;;;
-(with-transaction
+(with-environment
+ with-write-transaction
+ ;;with-read-transaction
  with-cursor
  dup-values
  dup-count
@@ -10,17 +12,56 @@
  all-values)
 
 (import chicken scheme)
-(use lmdb-lolevel lazy-seq miscmacros)
+(use lmdb-lolevel lazy-seq srfi-18 srfi-69 miscmacros posix)
 
-(define (with-transaction env thunk)
-  (let ((txn (mdb-txn-begin env #f 0)))
-    (handle-exceptions exn
-      (begin
-        (mdb-txn-abort txn)
-        (abort exn))
-      (begin0
+(define mutexes
+  (make-hash-table test: equal?
+                   hash: equal?-hash))
+
+(define (with-write-lock env thunk)
+  (unless (hash-table-exists? mutexes env)
+    (hash-table-set! mutexes env (make-mutex)))
+  (mutex-lock! (hash-table-ref mutexes env))
+  (handle-exceptions exn
+    (begin
+      (mutex-unlock! (hash-table-ref mutexes env))
+      (abort exn))
+    (begin0
+     (thunk)
+     (mutex-unlock! (hash-table-ref mutexes env)))))
+
+;; waits for a write transaction to become available without blocking
+;; other srfi-18 threads and ensures transaction is committed or
+;; aborted once thunk has completed
+(define (with-write-transaction env thunk)
+  (with-write-lock
+   env
+   (lambda ()
+     (let ((txn (mdb-txn-begin env #f 0)))
+       (handle-exceptions exn
+         (begin
+           (mdb-txn-abort txn)
+           (abort exn))
+         (begin0
           (thunk txn)
-        (mdb-txn-commit txn)))))
+          (mdb-txn-commit txn)))))))
+
+
+;; TODO: update with-read-transaction to use with-write-transaction on
+;; OpenBSD and a proper MDB_RDONLY transaction elsewhere?
+
+;; ;; with-read-transaction does not require a mutex as read transactions
+;; ;; can be opened concurrently. NOTE: read-only transactions currently
+;; ;; not supported on OpenBSD (6.1)
+;; (define (with-read-transaction env thunk)
+;;   (let ((txn (mdb-txn-begin env #f MDB_RDONLY)))
+;;     (handle-exceptions exn
+;;       (begin
+;;         (mdb-txn-abort txn)
+;;         (abort exn))
+;;       (begin0
+;;        (thunk txn)
+;;        (mdb-txn-commit txn)))))
 
 (define (with-cursor txn dbi thunk)
   (let ((cursor (mdb-cursor-open txn dbi)))
@@ -31,6 +72,38 @@
       (begin0
           (thunk cursor)
         (mdb-cursor-close cursor)))))
+
+;; a more convenient way to open an LMDB environment
+(define (with-environment path thunk #!key
+                          (create #t)
+                          mapsize
+                          maxdbs
+                          maxreaders
+                          flags
+                          (mode (bitwise-ior
+                                 perm/irusr
+                                 perm/iwusr
+                                 perm/irgrp
+                                 perm/iroth)))
+  (when create (create-directory path #t))
+  (let ((env (mdb-env-create)))
+    (when mapsize (mdb-env-set-mapsize env mapsize))
+    (when maxdbs (mdb-env-set-maxdbs env maxdbs))
+    (when maxreaders (mdb-env-set-maxreaders env maxreaders))
+    (handle-exceptions exn
+      (begin
+        (when (hash-table-exists? mutexes env)
+          (hash-table-delete! mutexes env))
+        (mdb-env-close env)
+        (abort exn))
+      (begin0
+        (mdb-env-open env path flags mode)
+        (thunk env)
+        (when (hash-table-exists? mutexes env)
+          ;; wait for writes to finish
+          (mutex-lock! (hash-table-ref mutexes env))
+          (hash-table-delete! mutexes env))
+        (mdb-env-close env)))))
 
 ;; returns false if next value not found
 (define (cursor-iter-dup cursor key first)
