@@ -25,6 +25,10 @@
         (compile -O2 -d1 -inline -s "../src/lazy-seq-utils.scm" -J
                  -o "dust.lazy-seq-utils.so")
         (compile -O2 -d0 -s "dust.lazy-seq-utils.import.scm"))
+       ("dust.linked-threads.so" ("../src/linked-threads.scm"  )
+        (compile -O2 -d1 -inline -s "../src/linked-threads.scm" -J
+                 -o "dust.linked-threads.so")
+        (compile -O2 -d0 -s "dust.linked-threads.import.scm"))
        ("dust.lmdb-utils.so" ("../src/lmdb-utils.scm")
         (compile -O2 -d1 -inline -s "../src/lmdb-utils.scm" -J
                  -o "dust.lmdb-utils.so")
@@ -76,6 +80,7 @@
     "dust.alist-match.so"
     "dust.bitstring-utils.so"
     "dust.lazy-seq-utils.so"
+    "dust.linked-threads.so"
     "dust.lmdb-utils.so"
     "dust.connection.so"
     "dust.environment.so"
@@ -113,6 +118,8 @@
     "dust.bitstring-utils.import.so"
     "dust.lazy-seq-utils.so"
     "dust.lazy-seq-utils.import.so"
+    "dust.linked-threads.so"
+    "dust.linked-threads.import.so"
     "dust.lmdb-utils.so"
     "dust.lmdb-utils.import.so"
     "dust.kademlia.so"
