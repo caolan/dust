@@ -8,6 +8,7 @@
  thread-start!
  thread-send
  thread-receive!
+ thread-mailbox
  thread-terminate!
  thread-link
  thread-monitor
@@ -114,6 +115,9 @@
 
 (define (thread-receive! . args)
   (apply mailbox-receive! (thread-mbox (current-thread)) args))
+
+(define (thread-mailbox)
+  (thread-mbox (current-thread)))
 
 ;; NOTE: using thread-terminate! from srfi-18 will immediate kill a
 ;; thread *without* alerting linked threads
