@@ -13,7 +13,9 @@
  thread-monitor
  current-thread
  exited-thread
- exited-thread-exception)
+ exited-thread-exception
+ thread-start-linked!
+ thread-start-monitored!)
 
 (import chicken scheme)
 (use data-structures srfi-1 mailbox (prefix srfi-18 srfi-18:))
@@ -83,13 +85,29 @@
 (define (make-thread thunk #!optional name)
   (add-state (srfi-18:make-thread (lambda () (with-handler thunk)))))
 
-(define (thread-start! thread)
-  ;; linked threads may already have been alerted to another thread exiting,
-  ;; causing them to be in the ready state before explicity being started
+(define (->thread x)
+  (if (procedure? x) (make-thread x) x))
+
+(define (start thread)
+  ;; linked threads may already have been alerted to another thread
+  ;; exiting, causing them to be in the ready state before explicity
+  ;; being started
   (unless (and (thread? thread)
                (eq? 'ready (srfi-18:thread-state thread)))
-    (srfi-18:thread-start!
-     (if (procedure? thread) (make-thread thread) thread))))
+    (srfi-18:thread-start! thread)))
+
+(define (thread-start! thread)
+  (start (->thread thread)))
+
+(define (thread-start-linked! thread)
+  (let ((t (->thread thread)))
+    (thread-link t)
+    (start t)))
+
+(define (thread-start-monitored! thread)
+  (let ((t (->thread thread)))
+    (thread-monitor t)
+    (start t)))
 
 (define (thread-send thread msg)
   (mailbox-send! (thread-mbox thread) msg))

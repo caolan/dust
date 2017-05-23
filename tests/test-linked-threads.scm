@@ -133,3 +133,34 @@
     (test 'terminated (thread-state t1))
     (test 'dead (thread-state t2))))
 
+(test-group "thread-start-linked!"
+  (let* ((t (make-thread
+             (lambda ()
+               (test 'example
+                     (condition-case
+                         (begin
+                           (thread-start-linked!
+                            (lambda ()
+                              (thread-sleep! 0.1)
+                              (abort 'example)))
+                           (let loop ()
+                             (thread-sleep! 1)
+                             (loop)))
+                       (exn (thread-exit)
+                            (exited-thread-exception exn))))))))
+    (thread-start! t)
+    (thread-sleep! 0.5)
+    (test 'dead (thread-state t))))
+
+(test-group "thread-start-monitored!"
+  (let* ((example-exn 'example)
+         (t1 (make-thread (lambda ()
+                            (let ((t2 (thread-start-monitored!
+                                       (lambda ()
+                                         (abort example-exn)))))
+                              (test `(thread-exit ,t2 ,example-exn)
+                                    (thread-receive!)))))))
+    (thread-start! t1)
+    (thread-join! t1)
+    (test 'dead (thread-state t1))))
+
