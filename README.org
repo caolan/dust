@@ -56,16 +56,6 @@ Then build and install dust:
   CPATH=/usr/local/include doas chicken-install
 #+END_SRC
 
-I had problems installing the mailbox egg because it includes
-inline-type-checks.scm from the check-errors egg, but the check-errors
-egg installs this file in $PREFIX/lib/chicken/<binversion> instead of
-the default CHICKEN_INCLUDE_PATH: (chicken-home), which is
-$PREFIX/share/chicken by default. To work around this, the mailbox egg can be installed by doing:
-
-#+BEGIN_SRC shell
-  CHICKEN_INCLUDE_PATH=`chicken-install -repository` doas chicken-install mailbox
-#+END_SRC
-
 Note: LMDB has to be used in MDB_WRITEMAP mode on OpenBSD due to the
 lack of a unified buffer cache. LMDB environments will reserve their
 full mapsize instead of growing as entries are added and nested
