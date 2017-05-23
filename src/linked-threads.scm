@@ -95,7 +95,8 @@
   ;; being started
   (unless (and (thread? thread)
                (eq? 'ready (srfi-18:thread-state thread)))
-    (srfi-18:thread-start! thread)))
+    (srfi-18:thread-start! thread))
+  thread)
 
 (define (thread-start! thread)
   (start (->thread thread)))
