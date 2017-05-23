@@ -42,10 +42,11 @@
     ((_ alist (else alternative ...))
      (begin alternative ...))
     ((_ alist ((pattern ...) body ...) clause ...)
-     (let ((match (alist-match-patterns alist pattern ...)))
+     (let* ((lst alist)
+            (match (alist-match-patterns lst pattern ...)))
        (if match
            (apply (format-lambda (pattern ...) body ...) match)
-           (alist-match alist clause ...))))
+           (alist-match lst clause ...))))
     ((_ alist)
      (abort (make-composite-condition
              (make-property-condition
