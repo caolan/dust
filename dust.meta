@@ -11,7 +11,6 @@
         srfi-117
         bencode
         gochan
-        mailbox
         socket
         udp6
         log5scm
