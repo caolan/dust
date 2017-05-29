@@ -9,7 +9,7 @@
  thread-send
  thread-receive!
  thread-messages
- thread-terminate!
+ thread-shutdown!
  thread-link
  thread-unlink
  thread-monitor
@@ -21,10 +21,11 @@
  thread-start-linked!
  thread-start-monitored!
  thread-signal!
- thread-yield!)
+ thread-yield!
+ thread-join!)
 
 (import chicken scheme)
-(use data-structures srfi-1 gochan (prefix srfi-18 srfi-18:))
+(use log5scm data-structures srfi-1 gochan (prefix srfi-18 srfi-18:))
 
 (define-record thread-state
   specific
@@ -85,58 +86,74 @@
   (let ((links (thread-links (current-thread))))
     (let loop ((linked '())
                (monitoring '()))
-      (if (not (gochan-empty? links))
-        (let ((msg (gochan-recv links)))
-          (case (car msg)
-            ((link)
-             (loop (if (member (cdr msg) linked)
-                       linked
-                       (cons (cdr msg) linked))
-                   monitoring))
-            ((unlink)
-             (loop (filter (lambda (t)
-                             (not (equal? t (cdr msg))))
-                           linked)
-                   monitoring))
-            
-            ((monitor)
-             (loop linked
-                   (if (member (cdr msg) monitoring)
-                       monitoring
-                       (cons (cdr msg) monitoring))))
-            ((demonitor)
-             (loop linked
-                   (filter (lambda (t)
-                             (not (equal? t (cdr msg))))
-                           monitoring)))))
-        (begin
-          ;; signal/shutdown linked threads
-          (for-each
-           (lambda (t)
-             (unless (thread-stopping? t)
+      (gochan-select
+       ((links -> msg)
+        (case (car msg)
+          ((link)
+           (loop (if (member (cdr msg) linked)
+                     linked
+                     (cons (cdr msg) linked))
+                 monitoring))
+          ((unlink)
+           (loop (filter (lambda (t)
+                           (not (equal? t (cdr msg))))
+                         linked)
+                 monitoring))
+          
+          ((monitor)
+           (loop linked
+                 (if (member (cdr msg) monitoring)
+                     monitoring
+                     (cons (cdr msg) monitoring))))
+          ((demonitor)
+           (loop linked
+                 (filter (lambda (t)
+                           (not (equal? t (cdr msg))))
+                         monitoring)))))
+       (else
+        ;; signal/shutdown linked threads
+        (printf "~S signaling / shutting down linked threads~n"
+                (current-thread))
+        (for-each
+         (lambda (t)
+           (if (thread-stopping? t)
+               (when (thread-shutdown-condition? exn)
+                 (printf "~S waiting for shutting down thread ~S~n"
+                         (current-thread)
+                         t)
+                 (thread-join! t))
                (if (thread-shutdown-condition? exn)
-                   (thread-terminate! t)
+                   (thread-shutdown! t)
                    (thread-signal! t (make-thread-exit-condition exn)))))
-           linked)
-          ;; message monitoring threads
-          (for-each
-           (lambda (t)
-             (unless (thread-stopping? t)
-               (thread-send t (list 'thread-exit (current-thread) exn))))
-           monitoring))))))
+         linked)
+        ;; message monitoring threads
+        (printf "~S messaging monitoring threads~n"
+                (current-thread))
+        (for-each
+         (lambda (t)
+           (unless (thread-stopping? t)
+             (thread-send t (list 'thread-exit (current-thread) exn))))
+         monitoring))))))
 
 (define (with-handler thunk)
   (handle-exceptions exn
     (begin
       (thread-stopping-set! (current-thread) #t)
+      (printf "~S got signal ~S~n" (current-thread) exn)
       (alert-linked-threads exn)
       (if (thread-shutdown-condition? exn)
-          (thread-terminate! (current-thread))
+          (begin
+            (printf "~S terminating~n" (current-thread))
+            (srfi-18:thread-terminate! (current-thread)))
           (abort exn)))
-    (thunk)))
+    (thunk)
+    (alert-linked-threads #f)))
 
 (define (make-thread thunk #!optional name)
-  (add-state (srfi-18:make-thread (lambda () (with-handler thunk)))))
+  (add-state
+   (srfi-18:make-thread
+    (lambda () (with-handler thunk))
+    name)))
 
 (define (->thread x)
   (if (procedure? x) (make-thread x) x))
@@ -164,20 +181,27 @@
     (start t)))
 
 (define (thread-send thread msg)
+  (log-for (debug linked-threads) "~S sending to ~S: ~S"
+           (current-thread)
+           thread
+           msg)
   (gochan-send (thread-mbox thread) msg))
 
 (define (thread-receive! #!optional timeout)
   (let* ((mbox (thread-mbox (current-thread)))
          (msg (if timeout
-                 (gochan-select
-                  ((mbox -> msg) msg)
-                  (((gochan-after timeout) -> _)
-                   (abort (make-composite-condition
-                           (make-property-condition 'exn
-                                                    'message "Timed out")
-                           (make-property-condition 'messages)
-                           (make-property-condition 'timeout)))))
-                 (gochan-recv mbox))))
+                  (gochan-select
+                   ((mbox -> msg) msg)
+                   (((gochan-after timeout) -> _)
+                    (abort (make-composite-condition
+                            (make-property-condition 'exn
+                                                     'message "Timed out")
+                            (make-property-condition 'messages)
+                            (make-property-condition 'timeout)))))
+                  (gochan-recv mbox))))
+    (log-for (debug linked-threads) "~S received: ~S"
+             (current-thread)
+             msg)
     msg))
 
 (define (thread-messages)
@@ -185,10 +209,17 @@
 
 ;; NOTE: using thread-terminate! from srfi-18 will immediate kill a
 ;; thread *without* alerting linked threads
-(define (thread-terminate! thread)
-  (assert (thread? thread))
+(define (thread-shutdown! thread)
+  (thread-unlink thread)
   (unless (thread-stopping? thread)
-    (srfi-18:thread-signal! thread (make-thread-shutdown-condition))))
+    (srfi-18:thread-signal! thread (make-thread-shutdown-condition)))
+  (printf "~S waiting for ~S to shutdown~n"
+          (current-thread)
+          thread)
+  (thread-join! thread)
+  (printf "~S finished waiting for ~S to shutdown~n"
+          (current-thread)
+          thread))
 
 ;; Creates a bi-directional link between current-thread and other-thread
 (define (thread-link other-thread)
@@ -223,5 +254,6 @@
     (srfi-18:thread-signal! thread exn)))
 
 (define thread-yield! srfi-18:thread-yield!)
+(define thread-join! srfi-18:thread-join!)
 
 )

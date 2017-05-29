@@ -19,6 +19,11 @@
      dust.bitstring-utils)
 
 
+;; (start-sender
+;;  catchall-sender
+;;  (port-sender (current-error-port))
+;;  (category *))
+
 (define (clear-testdb #!optional (path "tests/testdb"))
   (when (file-exists? path)
     (delete-directory path #t))
@@ -450,7 +455,7 @@
 (test-group "update-routing-table: insert into empty table"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        ;;  use a fixed current time for comparisons
@@ -474,7 +479,7 @@
 (test-group "update-routing-table: insert existing node"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        ;;  use a fixed current time for comparisons
@@ -503,7 +508,7 @@
 (test-group "update-routing-table: insert new node into existing bucket"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        ;;  use a fixed current time for comparisons
@@ -539,7 +544,7 @@
   ;; nodes with same first-seen values should then sort on node-id
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        ;;  use a fixed current time for comparisons
@@ -573,7 +578,7 @@
 (test-group "update-routing-table: insert new node into new bucket"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        ;;  use a fixed current time for comparisons
@@ -610,7 +615,7 @@
 (test-group "update-routing-table: split bucket"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        (parameterize
@@ -638,6 +643,18 @@
             #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa} ; 10101010
             "192.168.0.104"
             4219))
+         (test '((1 0) (1 1))
+               (map (compose bitstring->list blob->prefix)
+                    (lazy-seq->list
+                     (keys (store-txn store) (store-routing-table store)))))
+         (test '(#${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+                 #${bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+                 #${cccccccccccccccccccccccccccccccccccccccc}
+                 #${ffffffffffffffffffffffffffffffffffffffff})
+               (map (compose node-id blob->node)
+                    (lazy-seq->list
+                     (all-values (store-txn store)
+                                 (store-routing-table store)))))
          (test '()
                (lazy-seq->list
                 (bucket-nodes store (list->bitstring '(0)))))
@@ -677,7 +694,7 @@
 (test-group "update-routing-table: don't split bucket"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        (parameterize
@@ -737,7 +754,7 @@
 (test-group "update-routing-table: inserting existing node into full bucket updates last-seen"
   (with-test-store
    (lambda (store)
-     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa})) ; 101010...
+     (let ((test-id #${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000})) ; 101010...
        ;; use a fixed ID so bucket splits are predictable
        (local-id-set! store test-id)
        (parameterize
@@ -1104,30 +1121,32 @@
                                     (max-bucket-size)))))))))))
 
 (test-group "FIND_NODE returns k closest nodes"
-  (let ((nodes (<- (with-size 200 (gen-list-of random-node))))
-        (target-id (random-id)))
+  (let ((random-nodes (<- (with-size 200 (gen-list-of random-node))))
+        (target-id (random-id))
+        (test-nodes `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
+                      (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202))))
     (with-test-servers
-     `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)
-       (,(make-id 0 0 0 0 0 0 1 0) "127.0.0.1" 4202))
+     test-nodes
      (lambda (s1 s2)
-       (for-each
-        (lambda (node)
-          (apply server-add-node (cons s1 node)))
-        nodes)
-       (let ((nodes-by-distance
-              (map (lambda (x)
-                     (list (node-id (cdr x))
-                           (node-ip (cdr x))
-                           (node-port (cdr x))))
-                   (sort
-                    (map (lambda (node)
-                           (cons (distance (node-id node) target-id)
-                                 node))
-                         (server-all-nodes s1))
-                    (lambda (a b)
-                      (u8vector<? (car a) (car b)))))))
-         (test (take nodes-by-distance 20)
-               (send-find-node s2 "127.0.0.1" 4201 target-id)))))))
+       (let ((nodes (cons (second test-nodes) random-nodes)))
+         (for-each
+          (lambda (node)
+            (apply server-add-node (cons s1 node)))
+          nodes)
+         (let ((nodes-by-distance
+                (map (lambda (x)
+                       (list (node-id (cdr x))
+                             (node-ip (cdr x))
+                             (node-port (cdr x))))
+                     (sort
+                      (map (lambda (node)
+                             (cons (distance (node-id node) target-id)
+                                   node))
+                           (server-all-nodes s1))
+                      (lambda (a b)
+                        (u8vector<? (car a) (car b)))))))
+           (test (take nodes-by-distance 20)
+                 (send-find-node s2 "127.0.0.1" 4201 target-id))))))))
 
 (test-group "using multiple FIND_NODE hops to find a target node"
   (with-test-servers
@@ -1140,7 +1159,9 @@
      (,(make-id 0 1 0 0 0 0 0 0) "127.0.0.1" 4207)
      (,(make-id 1 0 0 0 0 0 0 0) "127.0.0.1" 4208))
    (lambda (s1 s2 s3 s4 s5 s6 s7 s8)
-     ;; manually link the network instead of doing a join
+     ;; manually link the network instead of doing a join as with a
+     ;; small network all nodes would have total knowledge of their
+     ;; peers and multiple hops would not be necessary
      (server-add-node s1 (server-id s2) "127.0.0.1" 4202)
      (server-add-node s2 (server-id s3) "127.0.0.1" 4203)
      (server-add-node s2 (server-id s4) "127.0.0.1" 4204)
@@ -1150,11 +1171,11 @@
      (server-add-node s5 (server-id s6) "127.0.0.1" 4206)
      (server-add-node s6 (server-id s7) "127.0.0.1" 4207)
      (server-add-node s7 (server-id s8) "127.0.0.1" 4208)
-     (let ((results
-            (server-find-node s1 #${80acd7e8509496bb47409bcec8ae83e5bd5363c8})))
-       (test (server-id s8) (node-id (car results)))
-       (test "127.0.0.1" (node-ip (car results)))
-       (test 4208 (node-port (car results)))))))
+     (let* ((results (server-find-node s1 (server-id s8)))
+            (closest (car results)))
+       (test (server-id s8) (node-id closest))
+       (test "127.0.0.1" (node-ip closest))
+       (test 4208 (node-port closest))))))
 
 (test-group "network of < k nodes, each should have total knowledge of network"
   (let ((test-servers `((,(make-id 0 0 0 0 0 0 0 1) "127.0.0.1" 4201)

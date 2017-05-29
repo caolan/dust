@@ -164,3 +164,11 @@
     (thread-join! t1)
     (test 'dead (thread-state t1))))
 
+(test-group "send thread-exit on normal end of thread"
+  (let ((t (make-thread (lambda () #t))))
+    (thread-monitor t)
+    (thread-start! t)
+    (thread-join! t)
+    (test (list 'thread-exit t #f)
+          (thread-receive!))))
+

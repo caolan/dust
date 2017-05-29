@@ -1,5 +1,7 @@
 (module dust.kademlia
 
+;; TODO: make node record type and routing-table-entry record type (which includes last-seen etc)? replace all locations using 3-element list for node data with proper node record
+
 ;;;;; Exports ;;;;;
 (make-node
  node-ip
@@ -43,15 +45,6 @@
  bucket-size
  find-bucket-for-id
  update-routing-table
- rpc-manager-start
- rpc-manager-listener
- rpc-manager-dispatcher
- rpc-manager-inbox
- rpc-manager-outbox
- rpc-manager-cancellations
- rpc-manager-threads-join
- rpc-manager-threads-terminate
- rpc-send
  send-ping
  send-store
  send-find-value
@@ -83,7 +76,6 @@
      extras
      udp6
      socket
-     srfi-18
      srfi-69
      gochan
      bencode
@@ -91,11 +83,15 @@
      bitstring
      defstruct
      log5scm
+     srfi-18
      dust.u8vector-utils
      dust.bitstring-utils
      dust.lazy-seq-utils
      dust.alist-match
-     dust.lmdb-utils)
+     dust.lmdb-utils
+     dust.thread-monitor
+     ;; dust.thread-pool
+     dust.rpc-manager)
 
 ;; LMDB does not work RDONLY on OpenBSD and should be used in MDB_WRITEMAP mode
 (define openbsd (string=? (car (system-information)) "OpenBSD"))
@@ -432,50 +428,56 @@
                   prev-key)))))))))
 
 (define (update-routing-table store id ip port)
-  (let ((prefix (find-bucket-for-id store id)))
-    (cond
-     ;; if no bucket found, insert node into new bucket
-     ((not prefix)
-      (bucket-insert store
-                     (bitstring-take (blob->bitstring id) 1)
-                     (make-node id: id
-                                ip: ip
-                                port: port
-                                first-seen: (current-seconds)
-                                last-seen: (current-seconds)
-                                failed-requests: 0)))
-     ;; if node already exists, update last-seen
-     ((bucket-find store prefix id) =>
-      (lambda (existing)
+  ;; (printf "~S update-routing-table: ~S ~S ~S~n" (local-id store) id ip port)
+  (unless (blob=? id (local-id store))
+    (let ((prefix (find-bucket-for-id store id)))
+      (cond
+       ;; if no bucket found, insert node into new bucket
+       ((not prefix)
+        (bucket-insert store
+                       (bitstring-take (blob->bitstring id) 1)
+                       (make-node id: id
+                                  ip: ip
+                                  port: port
+                                  first-seen: (current-seconds)
+                                  last-seen: (current-seconds)
+                                  failed-requests: 0)))
+       ;; if node already exists, update last-seen
+       ((bucket-find store prefix id) =>
+        (lambda (existing)
+          (bucket-insert store
+                         prefix
+                         (update-node existing
+                                      last-seen: (current-seconds)))))
+       ;; if bucket is full, split and try again or discard new ndoe
+       ((>= (bucket-size store prefix) (max-bucket-size))
+        ;; can bucket be split?
+        (when (bitstring-prefix? prefix (blob->bitstring (local-id store)))
+          (bucket-split store prefix)
+          (update-routing-table store id ip port)))
+       ;; bucket has space, insert new node
+       (else
         (bucket-insert store
                        prefix
-                       (update-node existing
-                                    last-seen: (current-seconds)))))
-     ;; if bucket is full, split and try again or discard new ndoe
-     ((>= (bucket-size store prefix) (max-bucket-size))
-      ;; can bucket be split?
-      (when (bitstring-prefix? prefix (blob->bitstring (local-id store)))
-        (bucket-split store prefix)
-        (update-routing-table store id ip port)))
-     ;; bucket has space, insert new node
-     (else
-      (bucket-insert store
-                     prefix
-                     (make-node id: id
-                                ip: ip
-                                port: port
-                                first-seen: (current-seconds)
-                                last-seen: (current-seconds)
-                                failed-requests: 0))))))
+                       (make-node id: id
+                                  ip: ip
+                                  port: port
+                                  first-seen: (current-seconds)
+                                  last-seen: (current-seconds)
+                                  failed-requests: 0)))))))
 
-(define (receive-ping env tid params from-host from-port)
+(define ((receive-ping env) tid params sid from-host from-port)
+  (when sid
+    (with-store env (cut update-routing-table <> sid from-host from-port)))
   (with-store env
               (lambda (store)
                 `((tid . ,tid)
                   (type . "r")
                   (data . ,(blob->string (local-id store)))))))
 
-(define (receive-store env tid params from-host from-port)
+(define ((receive-store env) tid params sid from-host from-port)
+  (when sid
+    (with-store env (cut update-routing-table <> sid from-host from-port)))
   (alist-match
    params
    ((key val)
@@ -503,7 +505,9 @@
       (code . 400)
       (desc . "Invalid STORE request")))))
 
-(define (receive-find-value env tid params from-host from-port)
+(define ((receive-find-value env) tid params sid from-host from-port)
+  (when sid
+    (with-store env (cut update-routing-table <> sid from-host from-port)))
   (alist-match
    params
    ((key)
@@ -537,16 +541,26 @@
         (bitconstruct (prefix bitstring) (0 1))
         (bitconstruct (prefix bitstring) (1 1)))))
 
-(define (take-closest nodes n target-id)
-  ;; (printf "take-closest: ~S ~S~n" n target-id)
+(define (take-sorted-unique xs n #!optional (results '()))
+  (cond ((or (= n 0) (null? xs))
+         (reverse results))
+        ((null? results)
+         (take-sorted-unique (cdr xs) (- n 1) (list (car xs))))
+        ((equal? (car results) (car xs))
+         (take-sorted-unique (cdr xs) n results))
+        (else
+         (take-sorted-unique (cdr xs) (- n 1) (cons (car xs) results)))))
+
+(define (take-closest-unique nodes n target-id)
   (map cdr
-       (take
+       (take-sorted-unique
         (sort (map (lambda (node)
                      (cons (distance (node-id node) target-id)
                            node))
                    nodes)
-              (lambda (a b) (u8vector<? (car a) (car b))))
-        (min n (length nodes)))))
+              (lambda (a b)
+                (u8vector<? (car a) (car b))))
+        n)))
 
 (define (take-at-most lst max-length)
   (cond ((= max-length 0) '())
@@ -584,7 +598,9 @@
                    (all-values (store-txn store)
                                (store-routing-table store))))))
 
-(define (receive-find-node env tid params from-host from-port)
+(define ((receive-find-node env) tid params sid from-host from-port)
+  (when sid
+    (with-store env (cut update-routing-table <> sid from-host from-port)))
   (alist-match
    params
    ((id)
@@ -607,134 +623,14 @@
       (code . 400)
       (desc . "Invaliid FIND_NODE request")))))
 
-(define rpc-handlers
+(define (rpc-handlers env)
   (alist->hash-table
-   `(("PING" . ,receive-ping)
-     ("STORE" . ,receive-store)
-     ("FIND_VALUE" . ,receive-find-value)
-     ("FIND_NODE" . ,receive-find-node))
+   `(("PING" . ,(receive-ping env))
+     ("STORE" . ,(receive-store env))
+     ("FIND_VALUE" . ,(receive-find-value env))
+     ("FIND_NODE" . ,(receive-find-node env)))
    string=?
    string-hash))
-
-;; places incoming bencoded messages onto a channel
-(define (rpc-listener socket channel)
-  (receive (n data from-host from-port) (udp-recvfrom socket 1200)
-    (let ((msg (condition-case (string->bencode data)
-                 ((exn bencode) #f))))
-      (if msg
-          (gochan-send channel (list msg from-host from-port))
-          (begin
-            (log-for (error kademlia)
-                     "Invalid incoming bencode message (from ~A:~A)~n"
-                     from-host
-                     from-port)
-            (log-for (debug kademlia) "~S" data)))))
-  (rpc-listener socket channel))
-
-;; TODO: validate that returned tid is from the same host:port that the original query was sent to!
-(define (send-to-channel channels tid data from-host from-port)
-  (let ((channel (hash-table-ref/default channels tid #f)))
-    (if channel
-        (begin
-          (hash-table-delete! channels tid)
-          (gochan-send channel data))
-        (log-for (error kademlia)
-                 "Missing transaction ID: ~A (from ~A:~A)~n"
-                 (bin->hex (string->blob tid))
-                 from-host
-                 from-port))))
-
-(define (rpc-dispatcher env socket inbox outbox cancellations waiting)
-  (gochan-select
-   ((inbox -> msg)
-    (match-let (((data from-host from-port) msg))
-      (alist-match data
-        (((type . "q") tid sid method)
-         (log-for (debug kademlia)
-                  "~A ~A:~A ~A"
-                  (with-store env local-id)
-                  from-host
-                  from-port
-                  method)
-         (with-store env (lambda (store)
-                           (update-routing-table
-                            store
-                            (string->blob sid)
-                            from-host
-                            from-port)))
-         (let ((params (alist-ref 'params data))
-               (handler (hash-table-ref/default rpc-handlers method #f)))
-           (if handler
-               (let ((data (handler env tid params from-host from-port)))
-                 ;; (log-for (debug kademlia)
-                 ;;          "~A =(~A:~A)=>~n~S"
-                 ;;          (with-store env local-id)
-                 ;;          from-host
-                 ;;          from-port
-                 ;;          data)
-                 (condition-case
-                     (udp-sendto socket
-                                 from-host
-                                 from-port
-                                 (bencode->string data))
-                   ((exn bencode)
-                    (log-for (error kademlia)
-                             "Invalid bencode returned by '~A' method handler~n"
-                             method))))
-               (log-for (error kademlia)
-                        "No handler for method '~A' (from ~A:~A)~n"
-                        method
-                        from-host
-                        from-port))))
-        (((type . "r") tid)
-         (send-to-channel waiting tid data from-host from-port))
-        (((type . "e") tid)
-         (send-to-channel waiting tid data from-host from-port))
-        (else
-         (log-for (error kademlia)
-                  "Invalid message format (from ~A:~A)~n"
-                  from-host
-                  from-port)))))
-   ((outbox -> msg)
-    (match-let (((data to-host to-port channel) msg))
-      (alist-match
-       data
-       ((tid)
-        (hash-table-set! waiting tid channel)
-        (udp-sendto socket to-host to-port (bencode->string data))))))
-   ((cancellations -> tid)
-    (hash-table-delete! waiting tid)))
-  (rpc-dispatcher env socket inbox outbox cancellations waiting))
-
-(define-record rpc-manager
-  inbox outbox cancellations waiting listener dispatcher)
-
-;; creates a new RPC manager for use with RPC calls, sets up
-;; inbox/outbox channels and starts listener/dispatcher threads
-(define (rpc-manager-start env socket)
-  (let ((inbox (gochan 0))
-        (outbox (gochan 0))
-        (cancellations (gochan 0))
-        (waiting (make-hash-table string=? string-hash)))
-    (make-rpc-manager
-     inbox
-     outbox
-     cancellations
-     waiting
-     (go (parameterize
-             ((socket-receive-timeout #f))
-           (rpc-listener socket inbox)))
-     (go (rpc-dispatcher env socket inbox outbox cancellations waiting)))))
-
-;; waits for all dispatcher threads to terminate
-(define (rpc-manager-threads-join rpc-manager)
-  (thread-join! (rpc-manager-listener rpc-manager))
-  (thread-join! (rpc-manager-dispatcher rpc-manager)))
-
-(define (rpc-manager-threads-terminate rpc-manager)
-  (thread-terminate! (rpc-manager-listener rpc-manager))
-  (thread-terminate! (rpc-manager-dispatcher rpc-manager)))
-
 
 (define-record server env socket rpc-manager events)
 
@@ -742,14 +638,16 @@
   (fprintf out "#<server ~A>" (bin->hex (server-id x))))
 
 (define (server-start path host port)
+  ;; (log-for (debug kademlia) "server-start: ~S ~S ~S" path host port)
   (let ((socket (udp-open-socket)))
     (udp-bind! socket host port)
     (let* ((env (kademlia-env-open path))
-           (rpc-manager (rpc-manager-start env socket)))
+           (rpc-manager (rpc-manager-start socket (rpc-handlers env))))
       (make-server env socket rpc-manager (gochan 0)))))
 
 (define (server-stop server)
-  (rpc-manager-threads-terminate (server-rpc-manager server))
+  ;; (log-for (debug kademlia) "server-stop: ~S" server)
+  (rpc-manager-stop (server-rpc-manager server))
   (udp-close-socket (server-socket server))
   (mdb-env-close (server-env server)))
 
@@ -817,123 +715,140 @@
     (assert (= 0 (c-distance a b result)))
     (blob->u8vector result)))
 
-(define (rpc-send server to-host to-port method params #!key (timeout 5000))
-  (let* ((manager (server-rpc-manager server))
-         (tid (blob->string (random-id)))
-         (response (gochan 0))
-         (msg (append `((tid . ,tid)
-                        (sid . ,(blob->string (server-id server)))
-                        (type . "q")
-                        (method . ,method))
-                      (if params `((params . ,params)) '()))))
-    (gochan-send (rpc-manager-outbox manager)
-                 (list msg to-host to-port response))
-    (gochan-select
-     ((response -> msg)
-      (alist-match msg
-                   (((type . "r") data) data)
-                   (((type . "e") code desc)
-                    (abort (make-composite-condition
-                            (make-property-condition 'exn
-                                                     'description desc)
-                            (make-property-condition 'kademlia-rpc
-                                                     'code code))))))
-     (((gochan-after timeout) -> _)
-      (gochan-send (rpc-manager-cancellations manager) tid)
-      (abort (make-composite-condition
-              (make-property-condition 'exn
-                                       'description (string-append
-                                                     method " call timed out"))
-              (make-property-condition 'kademlia-rpc)
-              (make-property-condition 'timeout)))))))
-  
 (define (send-ping server host port)
-  (string->blob (rpc-send server host port "PING" #f)))
+  (string->blob
+   (rpc-send (server-rpc-manager server)
+             host
+             port
+             "PING"
+             #f
+             server-id: (server-id server))))
 
 (define (send-store server host port key value)
-  (rpc-send server host port "STORE" `((key . ,key) (val . ,value))))
+  (rpc-send (server-rpc-manager server)
+            host
+            port
+            "STORE"
+            `((key . ,key) (val . ,value))
+            server-id: (server-id server)))
 
 (define (send-find-value server host port key)
-  (rpc-send server host port "FIND_VALUE" `((key . ,key))))
+  (rpc-send (server-rpc-manager server)
+            host
+            port
+            "FIND_VALUE"
+            `((key . ,key))
+            server-id: (server-id server)))
 
 (define (send-find-node server host port id)
-  (map (lambda (row)
-         (list (string->blob (vector-ref row 0))
-               (vector-ref row 1)
-               (vector-ref row 2)))
-       (vector->list
-        (rpc-send server host port "FIND_NODE" `((id . ,(blob->string id)))))))
+  (let ((results
+         (map (lambda (row)
+                (list (string->blob (vector-ref row 0))
+                      (vector-ref row 1)
+                      (vector-ref row 2)))
+              (vector->list
+               (rpc-send (server-rpc-manager server)
+                         host
+                         port
+                         "FIND_NODE"
+                         `((id . ,(blob->string id)))
+                         server-id: (server-id server))))))
+    ;; (printf "find-node results: ~S~n" results)
+    (for-each
+     (lambda (node)
+       (with-store (server-env server)
+                   (lambda (store)
+                     (apply update-routing-table (cons store node)))))
+     results)
+    results))
+
+(define (without item lst)
+  (filter (lambda (x) (not (equal? x item))) lst))
 
 (define (server-find-node server target-id)
-  (assert (server-has-node? server))
-  (let ((results (gochan 0)))
-    (let loop ((k-closest (with-store (server-env server)
-                                      (lambda (store)
-                                        (n-closest-nodes store
-                                                         target-id
-                                                         (max-bucket-size)))))
+  (let* ((channel (gochan 0))
+         (k-closest (with-store
+                     (server-env server)
+                     (lambda (store)
+                       (n-closest-nodes store
+                                        target-id
+                                        (max-bucket-size))))))
+    (let loop ((k-closest k-closest)
                (concurrency (concurrency))
-               (running 0)
-               (ignored '()))
+               (running '())
+               (ignored '())
+               (remaining k-closest))
       (cond
-       ;; if we've not hit full concurrency and there are non-ignored
-       ;; nodes remaining
-       ((and (< running concurrency)
-             (find (lambda (node) (not (member node ignored)))
-                   k-closest)) =>
-        (lambda (node)
-          ;; make async request to closest (non-ignored) node form
-          ;; k-closest list
-          (thread-start!
-           (lambda ()
-             (gochan-send
-              results
-              (send-find-node server
-                              (node-ip node)
-                              (node-port node)
-                              (node-id node)))))
+       ;; spawn thread up to the concurrency limit
+       ((and (not (null? remaining))
+             (< (length running) concurrency))
+        (let* ((node (car remaining))
+               (thread (go-monitored
+                        channel
+                        (gochan-send channel
+                                     (list 'thread-result
+                                           (send-find-node server
+                                                           (node-ip node)
+                                                           (node-port node)
+                                                           target-id))))))
           (loop k-closest
                 concurrency
-                (+ running 1)
-                (cons node ignored))))
-       ;; no more requests to make, and all running requests finished
-       ((= running 0) k-closest)
+                (cons thread running)
+                (cons (node-id node) ignored)
+                (cdr remaining))))
        (else
-        ;; wait for result
-        (gochan-select
-         ((results -> nodes)
-          (log-for (debug kademlia)
-                   "~A got nodes: ~S"
-                   (with-store (server-env server) local-id)
-                   nodes)
-          ;; add nodes to routing table
-          (let ((local-id (server-id server)))
-            (for-each
-             (lambda (node)
-               (unless (blob=? local-id (car node))
-                 (apply server-add-node (cons server node))))
-             nodes))
-          ;; recalculate k-closest list
-          (let ((k-closest2
-                 (with-store (server-env server)
-                             (lambda (store)
-                               (n-closest-nodes store
-                                                target-id
-                                                (max-bucket-size))))))
-            ;; check if distance to target is reducing
-            (if (u8vector<? (distance (node-id (car k-closest2)) target-id)
-                            (distance (node-id (car k-closest)) target-id))
-                (loop k-closest2
-                      concurrency
-                      (- running 1)
-                      ignored)
-                ;; if the distance didn't reduce, increase concurrency
-                ;; to max-bucket-size (k)
-                (loop k-closest2
-                      (max-bucket-size)
-                      (- running 1)
-                      ignored))))))))))
-          
+        ;; wait for results
+        (match (gochan-recv channel)
+          (('thread-exit thread exn)
+           (when exn
+             ;; TODO: handle timeouts etc
+             (abort exn))
+           (let ((running (without thread running)))
+             (cond
+              ;; finished processing?
+              ((and (null? remaining)
+                    (null? running))
+               ;; TODO: call rpc-cancel for remaining requests
+               (for-each thread-terminate! running)
+               k-closest)
+              (else
+               (loop k-closest
+                     concurrency
+                     running
+                     ignored
+                     remaining)))))
+          (('thread-result nodes)
+           (let* ((k-closest2 (take-closest-unique
+                               (append (map (lambda (x)
+                                              (make-node
+                                               id: (first x)
+                                               ip: (second x)
+                                               port: (third x)))
+                                            nodes)
+                                       k-closest)
+                               (max-bucket-size)
+                               target-id))
+                  (concurrency 
+                   ;; check if distance to target stopped reducing
+                   (if (u8vector<?
+                        (distance (node-id (car k-closest2)) target-id)
+                        (distance (node-id (car k-closest)) target-id))
+                       concurrency
+                       ;; if the distance didn't reduce, increase concurrency
+                       ;; to max-bucket-size (k)
+                       (max-bucket-size)))
+                  (remaining (filter (lambda (node)
+                                       (not (member (node-id node) ignored)))
+                                     k-closest2)))
+             (loop k-closest2
+                   concurrency
+                   running
+                   ignored
+                   remaining)))
+          (msg
+           (printf "unmatched message: ~S~n" msg)
+           (abort 'fail))))))))
+
 (define (server-join-network server)
   (assert (server-has-node? server))
   (server-find-node server (server-id server)))
