@@ -10,3 +10,5 @@
 /lib/detect-miniupnpc-features
 /bin/dust
 /bin/dustd
+*~
+\#*\#
