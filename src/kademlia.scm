@@ -941,21 +941,25 @@
 (define (server-store server key value)
   (let* ((hashed-key (generic-hash key size: hash-size))
          (nodes (server-find-node server hashed-key)))
-    (for-each
-     (lambda (node)
-       ;; TODO: make these requests in parallel
-       ;; TODO: what's the appropriate way to handle errors? should we retry?
-       (handle-exceptions exn
-           (log-for (error kademlia)
-                    "Failed STORE request to ~S: ~S"
-                    node
-                    exn)
-         (send-store server
-                     (node-ip node)
-                     (node-port node)
-                     hashed-key
-                     value)))
-     nodes)))
+    (let ((channel (gochan 0)))
+      ;; make requests in parallel
+      (for-each
+       (lambda (node)
+         (go-monitored
+          channel
+          (send-store server
+                      (node-ip node)
+                      (node-port node)
+                      hashed-key
+                      value)))
+       nodes)
+      (let loop ((waiting (length nodes)))
+        (unless (= 0 waiting)
+          (match (gochan-recv channel)
+            (('thread-exit thread exn)
+             (when exn
+               (log-for (error kademlia) exn))
+             (loop (- waiting 1)))))))))
 
 (define (server-join-network server)
   (assert (server-has-entry? server))
