@@ -8,6 +8,7 @@
  dup-values
  dup-count
  mdb-cursor-get/default
+ mdb-exists?
  keys
  all-values)
 
@@ -126,14 +127,21 @@
         lazy-null)))
 
 (define (dup-count txn dbi key)
-  (let ((cursor (mdb-cursor-open txn dbi)))
-    (mdb-cursor-get cursor key #f MDB_SET_KEY)
-    (mdb-cursor-count cursor)))
+  (condition-case
+      (let ((cursor (mdb-cursor-open txn dbi)))
+        (mdb-cursor-get cursor key #f MDB_SET_KEY)
+        (mdb-cursor-count cursor))
+    ((exn lmdb MDB_NOTFOUND) 0)))
 
 (define (mdb-cursor-get/default cursor key data op default)
   (condition-case
       (mdb-cursor-get cursor key data op)
     ((exn lmdb MDB_NOTFOUND) default)))
+
+(define (mdb-exists? txn dbi key)
+  (condition-case
+      (begin (mdb-get txn dbi key) #t)
+    ((exn lmdb MDB_NOTFOUND) #f)))
 
 (define (keys txn dbi)
   (let ((cursor (mdb-cursor-open txn dbi)))

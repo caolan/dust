@@ -1,7 +1,5 @@
 (module dust.kademlia
 
-;; TODO: make node record type and routing-table-entry record type (which includes last-seen etc)? replace all locations using 3-element list for node data with proper node record
-
 ;;;;; Exports ;;;;;
 (make-node
  node-ip
@@ -10,15 +8,18 @@
  node-port-set!
  node-id
  node-id-set!
- node-first-seen
- node-first-seen-set!
- node-last-seen
- node-last-seen-set!
- node-failed-requests
- node-failed-requests-set!
- update-node
- node->blob
- blob->node
+ make-routing-entry
+ routing-entry-node
+ routing-entry-node-set!
+ routing-entry-first-seen
+ routing-entry-first-seen-set!
+ routing-entry-last-seen
+ routing-entry-last-seen-set!
+ routing-entry-failed-requests
+ routing-entry-failed-requests-set!
+ update-routing-entry
+ routing-entry->blob
+ blob->routing-entry
  kademlia-env-open
  store-open
  store-txn
@@ -33,10 +34,10 @@
  prefix->blob
  blob->prefix
  prefix-blob-compare
- node-blob-compare
+ routing-entry-blob-compare
  max-bucket-size
  concurrency
- bucket-nodes
+ bucket-entries
  bucket-insert
  bucket-remove
  bucket-destroy
@@ -57,12 +58,15 @@
  server-id-set!
  server-add-node
  server-all-nodes
- server-has-node?
+ server-all-routing-entries
+ server-has-entry?
  server-events
  server-join-network
  distance
  n-closest-nodes
- server-find-node)
+ server-find-node
+ server-find-value
+ server-store)
 
 (import chicken scheme foreign)
 
@@ -109,22 +113,26 @@
 (define max-bucket-size (make-parameter 20))
 (define concurrency (make-parameter 3))
 
-(defstruct node
-  id
-  ip
-  port
-  first-seen
-  last-seen
-  failed-requests)
+(foreign-declare "#define HASH_SIZE 20")
+(define hash-size (foreign-value "HASH_SIZE" int))
+
+(define-record node id ip port)
 
 (define-record-printer (node x out)
-  (fprintf out "#<node ~S ~S ~S first:~S last:~S failed:~S>"
+  (fprintf out "#<node ~S ~S ~S>"
            (node-id x)
            (node-ip x)
-           (node-port x)
-           (node-first-seen x)
-           (node-last-seen x)
-           (node-failed-requests x)))
+           (node-port x)))
+
+(defstruct routing-entry
+  node first-seen last-seen failed-requests)
+
+(define-record-printer (routing-entry x out)
+  (fprintf out "#<routing-entry ~S first-seen:~S last-seen:~S failed-requests:~S>"
+           (routing-entry-node x)
+           (routing-entry-first-seen x)
+           (routing-entry-last-seen x)
+           (routing-entry-failed-requests x)))
 
 (define-record store
   txn
@@ -138,18 +146,19 @@
            (store-routing-table x)
            (store-metadata x)))
 
-(define (node->blob node)
-  (assert (= 20 (blob-size (node-id node))))
-  (bitstring->blob
-   (bitconstruct
-    ((node-id node) 160 bitstring)
-    ((node-first-seen node) 64 host signed)
-    ((node-last-seen node) 64 host signed)
-    ((node-failed-requests node) 8 host unsigned)
-    ((node-port node) 16 host unsigned)
-    ((string->bitstring (node-ip node)) bitstring))))
+(define (routing-entry->blob entry)
+  (let ((node (routing-entry-node entry)))
+    (assert (= hash-size (blob-size (node-id node))))
+    (bitstring->blob
+     (bitconstruct
+      ((node-id node) 160 bitstring)
+      ((routing-entry-first-seen entry) 64 host signed)
+      ((routing-entry-last-seen entry) 64 host signed)
+      ((routing-entry-failed-requests entry) 8 host unsigned)
+      ((node-port node) 16 host unsigned)
+      ((string->bitstring (node-ip node)) bitstring)))))
 
-(define (blob->node blob)
+(define (blob->routing-entry blob)
   (bitmatch blob
     (((id 160 bitstring)
       (first-seen-secs 64 host signed)
@@ -157,12 +166,13 @@
       (failed-requests 8 host unsigned)
       (port 16 host unsigned)
       (ip bitstring))
-     (make-node id: (bitstring->blob id)
-                ip: (bitstring->string ip)
-                port: port
-                first-seen: first-seen-secs
-                last-seen: last-seen-secs
-                failed-requests: failed-requests))))
+     (make-routing-entry
+      node: (make-node (bitstring->blob id)
+                       (bitstring->string ip)
+                       port)
+      first-seen: first-seen-secs
+      last-seen: last-seen-secs
+      failed-requests: failed-requests))))
 
 (define (kademlia-env-open path)
   (create-directory path #t)
@@ -271,13 +281,13 @@
                  (function int ((const (c-pointer (struct MDB_val)))
                                 (const (c-pointer (struct MDB_val)))))))
 
-;; sorts nodes stored in a dupsort db by first-seen timestamp field
+;; sorts routing entries stored in a dupsort db by first-seen timestamp field
 (foreign-declare
- "int kademlia_node_cmp(const MDB_val *a, const MDB_val *b) {
-    return memcmp(a->mv_data, b->mv_data, 20);
+ "int kademlia_routing_entry_cmp(const MDB_val *a, const MDB_val *b) {
+    return memcmp(a->mv_data, b->mv_data, HASH_SIZE);
   }")
 
-(define node-blob-compare
+(define routing-entry-blob-compare
   (foreign-lambda* int
    ((scheme-object a)
     (scheme-object b))
@@ -288,11 +298,11 @@
     val_a.mv_size = C_header_size(a);
     val_b.mv_data = C_data_pointer(b);
     val_b.mv_size = C_header_size(b);
-    C_return(kademlia_node_cmp(&val_a, &val_b));"))
+    C_return(kademlia_routing_entry_cmp(&val_a, &val_b));"))
 
 ;; Scheme reference to the custom C comparator function
-(define kademlia_node_cmp
-  (foreign-value "&kademlia_node_cmp"
+(define kademlia_routing_entry_cmp
+  (foreign-value "&kademlia_routing_entry_cmp"
                  (function int ((const (c-pointer (struct MDB_val)))
                                 (const (c-pointer (struct MDB_val)))))))
 
@@ -302,7 +312,7 @@
                            "routing-table"
                            (bitwise-ior MDB_DUPSORT MDB_CREATE))))
     (mdb-set-compare txn dbi kademlia_prefix_cmp)
-    (mdb-set-dupsort txn dbi kademlia_node_cmp)
+    (mdb-set-dupsort txn dbi kademlia_routing_entry_cmp)
     dbi))
 
 (define (metadata-open txn)
@@ -312,7 +322,7 @@
   (mdb-dbi-open txn "data" MDB_CREATE))
 
 (define (local-id-set! store id)
-  (assert (= 20 (blob-size id)))
+  (assert (= hash-size (blob-size id)))
   (mdb-put (store-txn store)
            (store-metadata store)
            (string->blob "local-id")
@@ -320,7 +330,7 @@
            0))
 
 (define (random-id)
-  (random-blob 20))
+  (random-blob hash-size))
 
 (define (local-id store)
   (condition-case
@@ -332,26 +342,26 @@
        (local-id-set! store new-id)
        new-id))))
 
-(define (bucket-nodes store prefix)
-  ;; (printf "bucket-nodes: ~S ~S ~S~n" txn dbi prefix)
-  (lazy-map blob->node (dup-values (store-txn store)
-                                   (store-routing-table store)
-                                   (prefix->blob prefix))))
+(define (bucket-entries store prefix)
+  ;; (printf "bucket-entries: ~S ~S ~S~n" txn dbi prefix)
+  (lazy-map blob->routing-entry (dup-values (store-txn store)
+                                            (store-routing-table store)
+                                            (prefix->blob prefix))))
 
-(define (bucket-insert store prefix node)
+(define (bucket-insert store prefix entry)
   ;; (printf "bucket-insert: ~S ~S ~S ~S~n" txn dbi prefix node)
   (mdb-put (store-txn store)
            (store-routing-table store)
            (prefix->blob prefix)
-           (node->blob node)
+           (routing-entry->blob entry)
            0))
 
-(define (bucket-remove store prefix node)
+(define (bucket-remove store prefix entry)
   ;; (printf "bucket-remove: ~S ~S ~S ~S~n" txn dbi prefix node)
   (mdb-del (store-txn store)
            (store-routing-table store)
            (prefix->blob prefix)
-           (node->blob node)))
+           (routing-entry->blob entry)))
 
 (define (bucket-destroy store prefix)
   ;; (printf "bucket-destroy: ~S ~S ~S~n" txn dbi prefix)
@@ -363,13 +373,14 @@
   ;; (printf "bucket-split: ~S ~S~n" store prefix)
   (let ((upper (bitstring-append prefix (list->bitstring '(1))))
         (lower (bitstring-append prefix (list->bitstring '(0)))))
-    (lazy-each (lambda (node)
-                 (if (bitstring-bit-set?
-                      (blob->bitstring (node-id node))
-                      (bitstring-length prefix))
-                     (bucket-insert store upper node)
-                     (bucket-insert store lower node)))
-               (bucket-nodes store prefix))
+    (lazy-each (lambda (entry)
+                 (let ((node (routing-entry-node entry)))
+                   (if (bitstring-bit-set?
+                        (blob->bitstring (node-id node))
+                        (bitstring-length prefix))
+                       (bucket-insert store upper entry)
+                       (bucket-insert store lower entry))))
+               (bucket-entries store prefix))
     (bucket-destroy store prefix)))
 
 (define (bucket-join store parent)
@@ -393,11 +404,11 @@
              (store-routing-table store)
              (prefix->blob prefix)))
 
-(define (bucket-find store prefix id)
+(define (bucket-find-entry store prefix id)
   (lazy-find
-   (lambda (node)
-     (blob=? (node-id node) id))
-   (bucket-nodes store prefix)))
+   (lambda (entry)
+     (blob=? (node-id (routing-entry-node entry)) id))
+   (bucket-entries store prefix)))
 
 (define (find-bucket-for-id store id)
   (let ((id (blob->bitstring id)))
@@ -427,109 +438,121 @@
              (and (bitstring-prefix? prev-key id)
                   prev-key)))))))))
 
-(define (update-routing-table store id ip port)
+(define (update-routing-table store node)
   ;; (printf "~S update-routing-table: ~S ~S ~S~n" (local-id store) id ip port)
-  (unless (blob=? id (local-id store))
-    (let ((prefix (find-bucket-for-id store id)))
+  (unless (blob=? (node-id node) (local-id store))
+    (let ((prefix (find-bucket-for-id store (node-id node))))
       (cond
        ;; if no bucket found, insert node into new bucket
        ((not prefix)
         (bucket-insert store
-                       (bitstring-take (blob->bitstring id) 1)
-                       (make-node id: id
-                                  ip: ip
-                                  port: port
-                                  first-seen: (current-seconds)
-                                  last-seen: (current-seconds)
-                                  failed-requests: 0)))
+                       (bitstring-take (blob->bitstring (node-id node)) 1)
+                       (make-routing-entry node: node
+                                           first-seen: (current-seconds)
+                                           last-seen: (current-seconds)
+                                           failed-requests: 0)))
        ;; if node already exists, update last-seen
-       ((bucket-find store prefix id) =>
+       ((bucket-find-entry store prefix (node-id node)) =>
         (lambda (existing)
           (bucket-insert store
                          prefix
-                         (update-node existing
-                                      last-seen: (current-seconds)))))
+                         (update-routing-entry existing
+                                               last-seen: (current-seconds)))))
        ;; if bucket is full, split and try again or discard new ndoe
        ((>= (bucket-size store prefix) (max-bucket-size))
         ;; can bucket be split?
         (when (bitstring-prefix? prefix (blob->bitstring (local-id store)))
           (bucket-split store prefix)
-          (update-routing-table store id ip port)))
+          (update-routing-table store node)))
        ;; bucket has space, insert new node
        (else
         (bucket-insert store
                        prefix
-                       (make-node id: id
-                                  ip: ip
-                                  port: port
-                                  first-seen: (current-seconds)
-                                  last-seen: (current-seconds)
-                                  failed-requests: 0)))))))
+                       (make-routing-entry node: node
+                                           first-seen: (current-seconds)
+                                           last-seen: (current-seconds)
+                                           failed-requests: 0)))))))
 
-(define ((receive-ping env) tid params sid from-host from-port)
-  (when sid
-    (with-store env (cut update-routing-table <> sid from-host from-port)))
-  (with-store env
-              (lambda (store)
-                `((tid . ,tid)
-                  (type . "r")
-                  (data . ,(blob->string (local-id store)))))))
+(define receive-ping
+  (make-rpc-handler
+   (lambda (env tid params from)
+     (with-store env
+                 (lambda (store)
+                   `((tid . ,tid)
+                     (type . "r")
+                     (data . ,(blob->string (local-id store)))))))))
 
-(define ((receive-store env) tid params sid from-host from-port)
-  (when sid
-    (with-store env (cut update-routing-table <> sid from-host from-port)))
-  (alist-match
-   params
-   ((key val)
-    (if (and (string? key) (string? val))
-        (begin
-          (with-store env
-                      (lambda (store)
-                        (mdb-put (store-txn store)
-                                 (store-data store)
-                                 (string->blob key)
-                                 (string->blob val)
-                                 0)))
-          (with-store env
-                      (lambda (store)
-                        `((tid . ,tid)
-                          (type . "r")
-                          (data . ,(blob->string (local-id store)))))))
-        `((tid . ,tid)
-          (type . "e")
-          (code . 400)
-          (desc . "Invalid STORE request"))))
-   (else
-    `((tid . ,tid)
-      (type . "e")
-      (code . 400)
-      (desc . "Invalid STORE request")))))
-
-(define ((receive-find-value env) tid params sid from-host from-port)
-  (when sid
-    (with-store env (cut update-routing-table <> sid from-host from-port)))
-  (alist-match
-   params
-   ((key)
-    (with-store
-     env
-     (lambda (store)
-       (if (string? key)
-           `((tid . ,tid)
-             (type . "r")
-             (data . ,(blob->string
-                       (mdb-get (store-txn store)
-                                (store-data store)
-                                (string->blob key)))))
+(define receive-store
+  (make-rpc-handler
+   (lambda (env tid params from)
+     (alist-match
+      params
+      ((key val)
+       (if (and (string? key)
+                (string? val)
+                (= (string-length key) hash-size))
+           (with-store env
+                       (lambda (store)
+                         (mdb-put (store-txn store)
+                                  (store-data store)
+                                  (string->blob key)
+                                  (string->blob val)
+                                  0)
+                         `((tid . ,tid)
+                           (type . "r")
+                           (data . ((ok . 1))))))
            `((tid . ,tid)
              (type . "e")
              (code . 400)
-             (desc . "Invalid FIND_VALUE request"))))))
-   (else
-    `((tid . ,tid)
-      (type . "e")
-      (code . 400)
-      (desc . "Invalid FIND_VALUE request")))))
+             (desc . "Invalid STORE request"))))
+      (else
+       `((tid . ,tid)
+         (type . "e")
+         (code . 400)
+         (desc . "Invalid STORE request")))))))
+
+(define receive-find-value
+  (make-rpc-handler
+   (lambda (env tid params from)
+     (alist-match
+      params
+      ((key)
+       (with-store
+        env
+        (lambda (store)
+          (cond
+           ((or (not (string? key))
+                (not (= hash-size (string-length key))))
+            `((tid . ,tid)
+              (type . "e")
+              (code . 400)
+              (desc . "Invalid FIND_VALUE request")))
+           ((mdb-exists? (store-txn store)
+                         (store-data store)
+                         (string->blob key))
+            `((tid . ,tid)
+              (type . "r")
+              (data . ((value . ,(blob->string
+                                  (mdb-get (store-txn store)
+                                           (store-data store)
+                                           (string->blob key))))))))
+           (else
+            (let ((nodes (list->vector
+                          (map (lambda (node)
+                                 (vector (blob->string (node-id node))
+                                         (node-ip node)
+                                         (node-port node)))
+                               (n-closest-nodes store
+                                                (string->blob key)
+                                                (max-bucket-size))))))
+              `((tid . ,tid)
+                (type . "r")
+                (data . ((nodes . ,nodes))))))))))
+      (else
+       `((tid . ,tid)
+         (type . "e")
+         (code . 400)
+         (desc . "Invalid FIND_VALUE request")))))))
 
 (define (prev-closest-bucket prefix)
   (and (> (bitstring-length prefix) 0)
@@ -594,34 +617,48 @@
             (cons (distance (node-id node) id) node)
             n))
          '()
-         (lazy-map blob->node
+         (lazy-map (compose routing-entry-node blob->routing-entry)
                    (all-values (store-txn store)
                                (store-routing-table store))))))
 
-(define ((receive-find-node env) tid params sid from-host from-port)
-  (when sid
-    (with-store env (cut update-routing-table <> sid from-host from-port)))
-  (alist-match
-   params
-   ((id)
-    (with-store
-     env
-     (lambda (store)
+(define (make-rpc-handler f)
+  (lambda (env)
+    (lambda (tid params sid from-host from-port)
+      (if (not sid)
+          `((tid . ,tid)
+            (type . "e")
+            (code . 400)
+            (desc . "RPC request missing sender ID (sid)"))
+          (begin
+            (let ((from (make-node sid from-host from-port)))
+              (with-store env (cut update-routing-table <> from))
+              (f env tid params from)))))))
+
+(define receive-find-node
+  (make-rpc-handler
+   (lambda (env tid params from)
+     (alist-match
+      params
+      ((id)
+       (with-store
+        env
+        (lambda (store)
+          (let ((nodes (list->vector
+                        (map (lambda (node)
+                               (vector (blob->string (node-id node))
+                                       (node-ip node)
+                                       (node-port node)))
+                             (n-closest-nodes store
+                                              (string->blob id)
+                                              (max-bucket-size))))))
+            `((tid . ,tid)
+              (type . "r")
+              (data . ((nodes . ,nodes))))))))
+      (else
        `((tid . ,tid)
-         (type . "r")
-         (data . ,(list->vector
-                   (map (lambda (node)
-                          (vector (blob->string (node-id node))
-                                  (node-ip node)
-                                  (node-port node)))
-                        (n-closest-nodes store
-                                         (string->blob id)
-                                         (max-bucket-size)))))))))
-   (else
-    `((tid . ,tid)
-      (type . "e")
-      (code . 400)
-      (desc . "Invaliid FIND_NODE request")))))
+         (type . "e")
+         (code . 400)
+         (desc . "Invaliid FIND_NODE request")))))))
 
 (define (rpc-handlers env)
   (alist->hash-table
@@ -669,19 +706,22 @@
   (with-store (server-env server)
               (cut local-id-set! <> id)))
 
-(define (server-add-node server id ip port)
+(define (server-add-node server node)
   (with-store (server-env server)
-              (cut update-routing-table <> id ip port)))
+              (cut update-routing-table <> node)))
 
-(define (server-all-nodes server)
+(define (server-all-routing-entries server)
   (with-store (server-env server)
               (lambda (store)
                 (lazy-seq->list
-                 (lazy-map blob->node
+                 (lazy-map blob->routing-entry
                            (all-values (store-txn store)
                                        (store-routing-table store)))))))
 
-(define (server-has-node? server)
+(define (server-all-nodes server)
+  (map routing-entry-node (server-all-routing-entries server)))
+
+(define (server-has-entry? server)
   (with-store (server-env server)
               (lambda (store)
                 (not (lazy-null?
@@ -712,7 +752,8 @@
      
 (define (distance a b)
   (let ((result (make-blob (blob-size a))))
-    (assert (= 0 (c-distance a b result)))
+    (assert (= 0 (c-distance a b result))
+            "mismatched blob sizes for distance calculation")
     (blob->u8vector result)))
 
 (define (send-ping server host port)
@@ -724,48 +765,73 @@
              #f
              server-id: (server-id server))))
 
-(define (send-store server host port key value)
+(define (send-store server host port hashed-key value)
+  (assert (= (blob-size hashed-key) hash-size) "Invalid hashed key blob size")
   (rpc-send (server-rpc-manager server)
             host
             port
             "STORE"
-            `((key . ,key) (val . ,value))
+            `((key . ,(blob->string hashed-key))
+              (val . ,(blob->string value)))
             server-id: (server-id server)))
 
-(define (send-find-value server host port key)
-  (rpc-send (server-rpc-manager server)
-            host
-            port
-            "FIND_VALUE"
-            `((key . ,key))
-            server-id: (server-id server)))
+(define (send-find-value server host port hashed-key)
+  (assert (= (blob-size hashed-key) hash-size) "Invalid hashed key blob size")
+  (let ((response (rpc-send (server-rpc-manager server)
+                            host
+                            port
+                            "FIND_VALUE"
+                            `((key . ,(blob->string hashed-key)))
+                            server-id: (server-id server))))
+    (alist-match
+     response
+     ((value)
+      `((value . ,(string->blob value))))
+     ((nodes)
+      (let ((results
+             (map (lambda (row)
+                    (make-node (string->blob (vector-ref row 0))
+                               (vector-ref row 1)
+                               (vector-ref row 2)))
+                  (vector->list nodes))))
+        ;; (printf "find-node results: ~S~n" results)
+        (for-each
+         (lambda (node)
+           (with-store (server-env server)
+                       (cut update-routing-table <> node)))
+         results)
+        `((nodes . ,results)))))))
 
 (define (send-find-node server host port id)
-  (let ((results
-         (map (lambda (row)
-                (list (string->blob (vector-ref row 0))
-                      (vector-ref row 1)
-                      (vector-ref row 2)))
-              (vector->list
-               (rpc-send (server-rpc-manager server)
-                         host
-                         port
-                         "FIND_NODE"
-                         `((id . ,(blob->string id)))
-                         server-id: (server-id server))))))
-    ;; (printf "find-node results: ~S~n" results)
-    (for-each
-     (lambda (node)
-       (with-store (server-env server)
-                   (lambda (store)
-                     (apply update-routing-table (cons store node)))))
-     results)
-    results))
+  (assert (= (blob-size id) hash-size) "Invalid node ID blob size")
+  (let ((response (rpc-send (server-rpc-manager server)
+                            host
+                            port
+                            "FIND_NODE"
+                            `((id . ,(blob->string id)))
+                            server-id: (server-id server))))
+    (alist-match
+     response
+     ((nodes)
+      (let ((results
+             (map (lambda (row)
+                    (make-node (string->blob (vector-ref row 0))
+                               (vector-ref row 1)
+                               (vector-ref row 2)))
+                  (vector->list nodes))))
+        ;; (printf "find-node results: ~S~n" results)
+        (for-each
+         (lambda (node)
+           (with-store (server-env server)
+                       (cut update-routing-table <> node)))
+         results)
+        `((nodes . ,results)))))))
 
 (define (without item lst)
   (filter (lambda (x) (not (equal? x item))) lst))
 
-(define (server-find-node server target-id)
+(define (recursive-rpc-call server target-id rpc expect-value)
+  (assert (= (blob-size target-id) hash-size) "Invalid target hash size")
   (let* ((channel (gochan 0))
          (k-closest (with-store
                      (server-env server)
@@ -787,10 +853,10 @@
                         channel
                         (gochan-send channel
                                      (list 'thread-result
-                                           (send-find-node server
-                                                           (node-ip node)
-                                                           (node-port node)
-                                                           target-id))))))
+                                           (rpc server
+                                                (node-ip node)
+                                                (node-port node)
+                                                target-id))))))
           (loop k-closest
                 concurrency
                 (cons thread running)
@@ -800,9 +866,10 @@
         ;; wait for results
         (match (gochan-recv channel)
           (('thread-exit thread exn)
+           ;; log error message if an exception occurred, but keep
+           ;; searching
            (when exn
-             ;; TODO: handle timeouts etc
-             (abort exn))
+             (log-for (error kademlia) exn))
            (let ((running (without thread running)))
              (cond
               ;; finished processing?
@@ -810,47 +877,88 @@
                     (null? running))
                ;; TODO: call rpc-cancel for remaining requests
                (for-each thread-terminate! running)
-               k-closest)
+               (if expect-value
+                   ;; TODO: handle not found case
+                   (abort "value not found")
+                   k-closest))
               (else
                (loop k-closest
                      concurrency
                      running
                      ignored
                      remaining)))))
-          (('thread-result nodes)
-           (let* ((k-closest2 (take-closest-unique
-                               (append (map (lambda (x)
-                                              (make-node
-                                               id: (first x)
-                                               ip: (second x)
-                                               port: (third x)))
-                                            nodes)
-                                       k-closest)
-                               (max-bucket-size)
-                               target-id))
-                  (concurrency 
-                   ;; check if distance to target stopped reducing
-                   (if (u8vector<?
-                        (distance (node-id (car k-closest2)) target-id)
-                        (distance (node-id (car k-closest)) target-id))
-                       concurrency
-                       ;; if the distance didn't reduce, increase concurrency
-                       ;; to max-bucket-size (k)
-                       (max-bucket-size)))
-                  (remaining (filter (lambda (node)
-                                       (not (member (node-id node) ignored)))
-                                     k-closest2)))
-             (loop k-closest2
-                   concurrency
-                   running
-                   ignored
-                   remaining)))
-          (msg
-           (printf "unmatched message: ~S~n" msg)
-           (abort 'fail))))))))
+          (('thread-result result)
+           (alist-match
+            result
+            ;; found value?
+            ((value)
+             (if expect-value
+                 ;; found a value, stop search
+                 value
+                 (begin
+                   ;; if we're not expecting a value, report error and
+                   ;; continue the search
+                   (log-for (error kademlia)
+                            "Unexpected value response during recursive RPC call")
+                   (loop k-closest
+                         concurrency
+                         running
+                         ignored
+                         remaining))))
+            ;; keep recursing using new nodes
+            ((nodes)
+             (let* ((k-closest2 (take-closest-unique
+                                 (append nodes k-closest)
+                                 (max-bucket-size)
+                                 target-id))
+                    (concurrency 
+                     ;; check if distance to target stopped reducing
+                     (if (u8vector<?
+                          (distance (node-id (car k-closest2)) target-id)
+                          (distance (node-id (car k-closest)) target-id))
+                         concurrency
+                         ;; if the distance didn't reduce, increase concurrency
+                         ;; to max-bucket-size (k)
+                         (max-bucket-size)))
+                    (remaining (filter (lambda (node)
+                                         (not (member (node-id node) ignored)))
+                                       k-closest2)))
+               (loop k-closest2
+                     concurrency
+                     running
+                     ignored
+                     remaining)))))))))))
+
+(define (server-find-node server id)
+  (recursive-rpc-call server id send-find-node #f))
+
+(define (server-find-value server key)
+  (recursive-rpc-call server
+                      (generic-hash key size: hash-size)
+                      send-find-value
+                      #t))
+
+(define (server-store server key value)
+  (let* ((hashed-key (generic-hash key size: hash-size))
+         (nodes (server-find-node server hashed-key)))
+    (for-each
+     (lambda (node)
+       ;; TODO: make these requests in parallel
+       ;; TODO: what's the appropriate way to handle errors? should we retry?
+       (handle-exceptions exn
+           (log-for (error kademlia)
+                    "Failed STORE request to ~S: ~S"
+                    node
+                    exn)
+         (send-store server
+                     (node-ip node)
+                     (node-port node)
+                     hashed-key
+                     value)))
+     nodes)))
 
 (define (server-join-network server)
-  (assert (server-has-node? server))
+  (assert (server-has-entry? server))
   (server-find-node server (server-id server)))
 
 )

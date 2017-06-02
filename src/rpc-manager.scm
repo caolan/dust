@@ -4,7 +4,8 @@
 (rpc-manager-start
  rpc-manager-stop
  rpc-send
- rpc-cancel)
+ rpc-cancel
+ rpc-timeout-condition?)
 
 (import chicken scheme)
 
@@ -82,8 +83,8 @@
            (gochan-send channel
                         `((type . "e")
                           (code . 0)
-                          (desc . (sprintf "Invalid bencode request: ~S"
-                                           data)))))))
+                          (desc . ,(sprintf "Invalid bencode request: ~S"
+                                            data)))))))
    (else
     (gochan-send channel
                  `((type . "e")
@@ -177,7 +178,7 @@
   (gochan-close (rpc-manager-cancellations manager)))
 
 (define (rpc-cancel manager tid)
-  (gochan-send (rpc-manager-cancellations manager) tid))
+  (gochan-send (rpc-manager-cancellations manager) (list tid)))
 
 (define (rpc-request tid method params #!optional server-id)
   (append `((tid . ,tid)
@@ -214,13 +215,17 @@
                 (make-property-condition 'rpc))))))
      (((gochan-after timeout) -> _)
       (rpc-cancel manager tid)
-      (abort (make-composite-condition
-              (make-property-condition
-               'exn
-               'message (string-append
-                         method
-                         (sprintf " call timed out (~Ams)" timeout)))
-              (make-property-condition 'rpc)
-              (make-property-condition 'timeout)))))))
+      (abort (make-rpc-timeout-condition
+              (string-append
+               method
+               (sprintf " call timed out (~Ams)" timeout))))))))
 
+(define (make-rpc-timeout-condition msg)
+  (make-composite-condition
+   (make-property-condition 'exn 'message msg)
+   (make-property-condition 'rpc-timeout)))
+
+(define rpc-timeout-condition?
+  (condition-predicate 'rpc-timeout))
+  
 )
